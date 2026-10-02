@@ -1,0 +1,19 @@
+name: check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v4
+        with:
+          version: "2026.9.9"
+          install_args: "aqua:nextest-rs/nextest/cargo-nextest aqua:evilmartians/lefthook"
+      - run: rustup toolchain install --no-self-update
+      - run: mise run setup
+      - run: mise run check

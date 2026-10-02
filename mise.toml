@@ -1,0 +1,36 @@
+min_version = "2026.9.9"
+
+[settings]
+disable_tools = ["rust"]
+auto_install = false
+
+[tool_config]
+locked = true
+
+[tools]
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.145"
+"aqua:evilmartians/lefthook" = "2.1.14"
+
+[tasks.setup]
+description = "Fetch locked dependencies and install Git hooks"
+run = ["cargo fetch --locked", "lefthook install"]
+
+[tasks.fmt]
+description = "Format all current-workspace Rust sources (not archives)"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+run = "cargo clippy --locked --workspace --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Build products and Provider, then run executable-boundary conformance (requires Python 3)"
+run = ["cargo build --locked --workspace --bins", "cargo nextest run --locked --workspace", "cargo test --locked --workspace --doc"]
+
+[tasks."check:quick"]
+run = "cargo check --locked --workspace --all-targets"
+
+[tasks.check]
+depends = ["fmt-check", "lint", "test"]

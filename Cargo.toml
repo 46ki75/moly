@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/moly", "crates/moly-client", "crates/moly-server", "crates/moly-protocol", "crates/moly-provider-openai"]
+exclude = ["archive"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+moly-protocol = { path = "crates/moly-protocol" }
+moly-client = { path = "crates/moly-client" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+thiserror = "2.0.18"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+uuid = { version = "1.20.0", features = ["v4", "serde"] }
+interprocess = { version = "2.4.0", features = ["tokio"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3.24.0"
+
+[workspace.lints.rust]
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

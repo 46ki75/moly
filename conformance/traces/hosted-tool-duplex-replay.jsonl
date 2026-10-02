@@ -1,0 +1,32 @@
+{"version":1,"type":"request","id":1,"method":"initialize","params":{"protocol_version":1}}
+{"version":1,"type":"response","id":1,"result":{"server_id":"00000000-0000-4000-8000-000000000001","role":"server","protocol_version":1}}
+{"version":1,"type":"request","id":2,"method":"config.apply","params":{"base_revision":0,"config":{"model_endpoint":"http://127.0.0.1:1/v1/chat/completions","model":"conformance-model","workspace":"/workspace","secret_ref":null}}}
+{"version":1,"type":"response","id":2,"result":{"revision":1,"config":{"model_endpoint":"http://127.0.0.1:1/v1/chat/completions","model":"conformance-model","workspace":"/workspace","secret_ref":null}}}
+{"version":1,"type":"request","id":3,"method":"session.create","params":null}
+{"version":1,"type":"response","id":3,"result":{"session_id":"00000000-0000-4000-8000-000000000002"}}
+{"version":1,"type":"request","id":4,"method":"tools.register","params":{"session_id":"00000000-0000-4000-8000-000000000002","tools":[{"name":"client_echo","description":"Echo a value","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}
+{"version":1,"type":"response","id":4,"result":{"executor_id":"00000000-0000-4000-8000-000000000003"}}
+{"version":1,"type":"request","id":5,"method":"subscribe","params":{"session_id":"00000000-0000-4000-8000-000000000002","after_seq":0}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":1,"kind":"session_created"}}
+{"version":1,"type":"response","id":5,"result":{"live_head":1}}
+{"version":1,"type":"request","id":6,"method":"run.start","params":{"session_id":"00000000-0000-4000-8000-000000000002","message":"Echo hello"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":2,"kind":"message_accepted","message":"Echo hello"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":3,"kind":"run_started","run_id":"00000000-0000-4000-8000-000000000004","config_revision":1}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":4,"kind":"model_call_started","run_id":"00000000-0000-4000-8000-000000000004","model_call_id":"00000000-0000-4000-8000-000000000005"}}
+{"version":1,"type":"response","id":6,"result":{"run_id":"00000000-0000-4000-8000-000000000004"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":5,"kind":"tool_started","run_id":"00000000-0000-4000-8000-000000000004","lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1},"name":"client_echo"}}
+{"version":1,"type":"request","id":1,"method":"tool.execute","params":{"session_id":"00000000-0000-4000-8000-000000000002","lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1},"name":"client_echo","arguments":{"text":"hello"}}}
+{"version":1,"type":"request","id":7,"method":"config.get","params":null}
+{"version":1,"type":"response","id":7,"result":{"revision":1,"config":{"model_endpoint":"http://127.0.0.1:1/v1/chat/completions","model":"conformance-model","workspace":"/workspace","secret_ref":null}}}
+{"version":1,"type":"response","id":1,"result":{"lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1},"output":{"revision":1,"echo":{"text":"hello"}}}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":6,"kind":"tool_completed","run_id":"00000000-0000-4000-8000-000000000004","lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1}}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":7,"kind":"model_call_started","run_id":"00000000-0000-4000-8000-000000000004","model_call_id":"00000000-0000-4000-8000-000000000007"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":8,"kind":"assistant_message","run_id":"00000000-0000-4000-8000-000000000004","text":"hello"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":9,"kind":"run_completed","run_id":"00000000-0000-4000-8000-000000000004"}}
+{"version":1,"type":"request","id":8,"method":"subscribe","params":{"session_id":"00000000-0000-4000-8000-000000000002","after_seq":4}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":5,"kind":"tool_started","run_id":"00000000-0000-4000-8000-000000000004","lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1},"name":"client_echo"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":6,"kind":"tool_completed","run_id":"00000000-0000-4000-8000-000000000004","lease":{"tool_run_id":"00000000-0000-4000-8000-000000000006","executor_id":"00000000-0000-4000-8000-000000000003","generation":1}}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":7,"kind":"model_call_started","run_id":"00000000-0000-4000-8000-000000000004","model_call_id":"00000000-0000-4000-8000-000000000007"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":8,"kind":"assistant_message","run_id":"00000000-0000-4000-8000-000000000004","text":"hello"}}
+{"version":1,"type":"event","event":"session.event","params":{"session_id":"00000000-0000-4000-8000-000000000002","seq":9,"kind":"run_completed","run_id":"00000000-0000-4000-8000-000000000004"}}
+{"version":1,"type":"response","id":8,"result":{"live_head":9}}

@@ -1,0 +1,15 @@
+lefthook: mise exec -- lefthook
+output:
+  - summary
+  - success
+  - failure
+  - skips
+pre-commit:
+  commands:
+    rust-format:
+      glob: "*.rs"
+      run: mise run --silent fmt-check
+commit-msg:
+  commands:
+    conventional:
+      run: 'grep -Eq "^(feat|fix|chore|test|refactor|docs)(!)?: .+" "{1}"'
