@@ -98,7 +98,7 @@ pub enum ModelMessage {
         /// Provider-owned replay data, if needed.
         metadata: Option<ProviderMetadata>,
     },
-    /// Completed hosted tool result.
+    /// Known hosted tool outcome, including recoverable execution failures.
     ToolResult {
         /// Correlation from the originating assistant message.
         call_id: String,

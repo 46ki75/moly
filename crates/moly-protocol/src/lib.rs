@@ -239,7 +239,9 @@ pub struct ToolExecute {
 pub struct ToolResult {
     /// Echoed execution authority.
     pub lease: ToolLease,
-    /// JSON result; sensitive and never logged by default.
+    /// JSON outcome; sensitive and never logged by default. Known execution
+    /// failures may use `{"error": {"code": string, "message": string}}`.
+    /// This is an ordinary result, not an RPC error; Core keeps it opaque.
     pub output: Value,
 }
 /// Canonical committed session transition, replayed unchanged after reconnect.
@@ -287,7 +289,8 @@ pub enum EventKind {
         /// Capability name.
         name: String,
     },
-    /// A matching tool result was committed.
+    /// A matching tool result was committed, including known execution failures.
+    /// This means the attempt returned an outcome, not that the operation succeeded.
     ToolCompleted {
         /// Owning run.
         run_id: RunId,

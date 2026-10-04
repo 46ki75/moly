@@ -87,6 +87,48 @@ The bundled Provider supports only hosted function calls and final text. Native 
 features are a different execution class and currently unsupported. A run may make
 up to 16 model steps; a provider step may request up to 32 sequential hosted tools.
 
+### Tool execution outcomes
+
+A known execution failure is an ordinary `tool.execute` response with the original
+lease and structured `output`, not a protocol error. The recommended failure output is:
+
+```json
+{"error":{"code":"tool_file_not_found","message":"Requested file was not found"}}
+```
+
+Core keeps `output` opaque. The executor classifies failures and supplies sanitized
+messages without credentials, host paths, or native diagnostics. Each result retains
+the originating Provider call ID in model context. Unless a runtime fault or
+cancellation terminates the run, all calls in an accepted batch return results
+before the next model step; the model may correct a request or ask for help.
+The Server does not automatically retry tools.
+
+The bundled `read_file` returns `{"content": string}` on success and the failure
+shape above for invalid arguments, path refusals, or read errors:
+
+| Failure | Output error code |
+| --- | --- |
+| Invalid arguments | `invalid_params` |
+| Path outside workspace | `tool_path_outside_workspace` |
+| Nonregular file | `tool_invalid_path` |
+| Missing file | `tool_file_not_found` |
+| Permission denied | `tool_permission_denied` |
+| Other file I/O error | `tool_error` |
+| Invalid UTF-8 | `tool_invalid_utf8` |
+| File larger than 64 KiB | `tool_result_too_large` |
+
+Invalid workspace configuration, stale/mismatched execution authority, executor
+loss/timeouts, malformed protocol/results, and reverse RPC errors still fail the
+run. Cancellation remains terminal. These faults are not converted into model-facing
+results. Malformed Provider batches, including non-object arguments or
+unadvertised tools, remain rejected before any tool effects. Client-hosted tools
+opt into recovery by returning failure data inside `output`. An SDK callback
+`Err(ProtocolError)` remains fatal, even with a code such as `tool_error` (the current
+Server adapter redacts reverse RPC failures to `executor_lost`).
+
+This intentionally changes bundled `read_file` failure behavior without changing
+wire shapes, successful outputs, or protocol versions.
+
 ## Canonical events and ordering
 
 Events use `type: event`, `event: session.event`, and a typed `params` object with
@@ -107,6 +149,10 @@ model_call_started(new ModelCallId)
 assistant_message
 run_completed
 ```
+
+`tool_completed` means a matching result was committed, including a known execution
+failure; it does not assert that the requested operation succeeded. The event does
+not carry the result or a success flag. Known failures are conveyed in model context.
 
 `run_failed` and `run_cancelled` are alternative terminal transitions. Outstanding
 ToolRuns become unsuccessful when their owning run terminates; the current implementation does not emit a

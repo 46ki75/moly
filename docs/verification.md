@@ -4,6 +4,28 @@ Verified on macOS arm64 with pinned Rust 1.98.0 and system Python 3.9.6. The rep
 started empty. Earlier checkpoints reached 59, 82, 86, and 93 tests. The Provider
 protocol work began by rerunning the **93-test / 3-doctest baseline successfully**.
 
+## Recoverable tool outcomes checkpoint
+
+- The unchanged baseline passed **141 tests and 3 SDK doctests**.
+- Three SDK/Server/Provider regressions and the Go CLI regression failed before
+  implementation: missing-file recovery, mixed success/failure batches, the
+  16-model-step failure bound, and Go tool-error continuation. Updated executor
+  expectations also failed before the fix. All now pass.
+- Known `read_file` failures now return sanitized `output.error` with the matching
+  lease. Success payloads and all wire shapes/versions are unchanged; arbitrary RPC
+  errors are not reclassified. Core uses its existing result-commit/continuation path.
+- Conformance verifies originating call IDs, batch ordering, later-turn context,
+  cancellation discarding partial context, stale-lease rejection for success/error
+  outputs, invalid-workspace failure, and Client-hosted error-result versus RPC-error
+  handling. Go mock HTTP retains session headers and opaque reasoning across recovery.
+- The full gate passes **148 tests, zero skipped, and 3 SDK doctests**, including
+  binary builds, formatting, and warnings-denied Clippy. Formatting failed before
+  rustfmt, passes afterward, and is stable on a second pass. Startup and Unix
+  subprocess/signal smoke pass. No running user Server was restarted or terminated.
+- Permission-denied and generic I/O redaction are tested with synthetic I/O errors;
+  this is not platform ACL validation. No live Go/model service or native Windows/Linux
+  execution was exercised for this fix. Directory listing remains unimplemented.
+
 ## OpenCode Go checkpoint
 
 - The existing 131-test / 3-doctest gate passed before changes. The initial Go
