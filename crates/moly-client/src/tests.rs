@@ -1,4 +1,6 @@
 //! Conformance adapters for SDK behavior and its private transport.
+#[path = "auth_tests.rs"]
+mod auth;
 #[path = "../../../conformance/protocol/client_lifetime.rs"]
 mod client_lifetime;
 #[path = "../../../conformance/protocol/duplex.rs"]

@@ -1,15 +1,11 @@
 //! Real-process, cross-language tests. No Provider runtime code is shared with
 //! the Python peer, and all Client traffic uses the SDK's public facade.
-#[path = "audited_server.rs"]
-mod audited_server;
-
-use crate::server_process::ServerProcess;
-use audited_server::AuditedServer;
+use crate::{audited_server::AuditedServer, server_process::ServerProcess};
 use moly_client::{
     Client, Error, Events, Tool,
     protocol::{
         EventKind, ResolvedConfig, RunId, SessionEvent, SessionId, ToolDefinition,
-        model::{ComponentCommand, ProviderConfig},
+        model::{ComponentCommand, PROVIDER_VERSION, ProviderConfig},
     },
 };
 use serde_json::{Value, json};
@@ -319,7 +315,7 @@ async fn independent_provider_normalizes_context_and_is_launched_by_server() -> 
         assert_eq!(validations[0]["request"]["params"], config.provider.options);
         for pair in records.as_chunks::<2>().0 {
             assert_eq!(pair[0]["request"]["method"], "initialize");
-            assert_eq!(pair[0]["request"]["params"], json!({"protocol_version":1}));
+            assert_eq!(pair[0]["request"]["params"], json!({"protocol_version":PROVIDER_VERSION}));
             assert_eq!(pair[0]["pid"], pair[1]["pid"]);
             assert_eq!(pair[0]["ppid"], server.pid, "exact OS parent must be the Server");
             assert_eq!(pair[0]["environment"], serde_json::to_value(&config.provider.command.env)?);

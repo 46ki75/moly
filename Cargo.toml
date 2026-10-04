@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/moly", "crates/moly-client", "crates/moly-server", "crates/moly-protocol", "crates/moly-provider-openai"]
+members = ["crates/moly", "crates/moly-client", "crates/moly-server", "crates/moly-protocol", "crates/moly-provider-openai", "crates/moly-provider-openai-codex", "crates/moly-provider-client"]
 exclude = ["archive"]
 resolver = "3"
 
@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 moly-protocol = { path = "crates/moly-protocol" }
 moly-client = { path = "crates/moly-client" }
+moly-provider-client = { path = "crates/moly-provider-client" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }

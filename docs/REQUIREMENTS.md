@@ -21,10 +21,16 @@ A **Component** is a logical part that communicates with other Components throug
 The architecture MUST distinguish these primary Component roles:
 
 - **Client**
-- **Server**
+- **Agent Server**
 - **Daemon**
 - **Model Provider**
 - **Session Store**
+
+**Agent Server** is the formal component name for the owner of the agentic loop.
+Older **Server** terminology aliases Agent Server. This naming change MUST NOT
+rename the `moly-server` executable/crate, Rust symbols such as `ServerId` and
+`SERVER_VERSION`, wire role `server`, method strings, schema IDs/filenames, or
+protocol versions; those identifiers remain unchanged for compatibility.
 
 These roles MUST remain logically distinct even when packaged or distributed together. Component boundaries MUST NOT depend on a particular programming language, crate layout, transport, or codec. Transport and codec implementations carry protocol messages; that alone does not make them Components.
 
@@ -55,14 +61,14 @@ A Client MAY:
 - submit user messages
 - start runs
 - cancel runs
-- subscribe to Server events
-- provide tools to the Server
-- provide resolved configuration to the Server
+- subscribe to Agent Server events
+- provide tools to the Agent Server
+- provide resolved configuration to the Agent Server
 - participate in user-facing authentication or interaction flows
 
-The Client MUST interact with the Server through the public Server protocol rather than Server implementation APIs.
+The Client MUST interact with the Agent Server through the public Agent Server protocol rather than Agent Server implementation APIs. Explicit direct Provider access as specified in section 3.3 is a separate workflow, not a bypass for Agent Server operations.
 
-The user-facing CLI MUST NOT depend directly on Server implementation internals.
+The user-facing CLI MUST NOT depend directly on Agent Server implementation internals.
 
 ---
 
@@ -72,7 +78,7 @@ The CLI SHOULD optimize aggressively for time to first interactive render.
 
 Displaying the initial UI and accepting user input MUST NOT require:
 
-- a running Server
+- a running Agent Server
 - a running Daemon
 - a model provider connection
 - provider authentication
@@ -82,7 +88,7 @@ Displaying the initial UI and accepting user input MUST NOT require:
 - history storage connectivity or authentication
 - history enumeration or restoration
 
-Server, Model Provider, and Session Store initialization SHOULD be lazy.
+Agent Server, Model Provider, and Session Store initialization SHOULD be lazy.
 
 A typical startup flow SHOULD be:
 
@@ -94,11 +100,11 @@ A typical startup flow SHOULD be:
         ↓
     accept input
         ↓
-    first operation requiring the Server
+    first operation requiring the Agent Server
         ↓
     resolve configuration
-    locate or spawn Server
-    connect to Server
+    locate or spawn Agent Server
+    connect to Agent Server
         ↓
     submit operation
 
@@ -106,13 +112,27 @@ The Client MAY perform speculative background prewarming after first render, but
 
 ---
 
-# 4. Server Requirements
+## 3.3 Explicit direct CLI mode
 
-## 4.1 Server role
+The CLI MAY host a Provider directly through the **Moly Provider Protocol (MPP)** for authentication and multi-turn, model-only chat. This is a host responsibility, not a new Component role or a Client-owned Agent Server runtime.
 
-The Server MUST be the authoritative live state machine for agent execution.
+- Direct mode MUST be explicitly selected with `moly --direct`. It MUST be incompatible with `--connect`. The normal Agent Server path MUST remain the default, with no automatic fallback between modes or Providers.
+- Direct mode MUST NOT spawn or contact an Agent Server. Provider initialization MUST remain lazy under section 3.2.
+- The direct CLI MUST own its Provider children, resolved Provider configuration, interaction UI, in-process credential slot, and local conversation context. It MUST preserve supported opaque replay metadata across successful turns and discard failed or cancelled turn working context.
+- The initial direct mode MUST advertise no tools, reject returned tool requests, and perform no tool effects. It MUST NOT independently execute an agentic loop.
+- Local context and correlation identities MUST NOT confer Agent Server session ownership, canonical event replay, saved-session access, or multi-client continuity. `/new` MUST reset the local conversation identity/context without clearing authentication.
+- Credentials MUST remain in CLI process memory and be lost at exit. Persisted host identity and registration metadata MUST be nonsecret and follow the same Unix owner-only permission and conflict-protection policy as the Agent Server-path CLI.
+- Direct mode MUST NOT communicate with a Session Store, mutate Agent Server-owned history, take over an Agent Server run, or weaken the Agent Server authority requirements below.
 
-The Server MUST own live state associated with:
+---
+
+# 4. Agent Server Requirements
+
+## 4.1 Agent Server role
+
+The Agent Server MUST be the authoritative live state machine for agent execution and MUST own the agentic loop: model-call ordering, hosted-tool coordination, and continuation. Direct model-only chat under section 3.3 is not an agent runtime and does not transfer or duplicate this authority.
+
+The Agent Server MUST own live state associated with its agent execution:
 
 - sessions
 - agents
@@ -128,7 +148,7 @@ The Server MUST own live state associated with:
 - checkpoint generation
 - Client subscriptions
 
-The Server MUST support multiple concurrently connected Clients.
+The Agent Server MUST support multiple concurrently connected Clients.
 
 ---
 
@@ -146,7 +166,7 @@ The following identities MUST remain logically independent:
 A transport connection closing MUST NOT inherently:
 
 - destroy a session
-- terminate the Server
+- terminate the Agent Server
 - cancel an active run
 
 unless an explicit policy requires it.
@@ -155,7 +175,7 @@ unless an explicit policy requires it.
 
 ## 4.3 Session ordering
 
-The Server MUST establish the canonical semantic ordering of state transitions.
+The Agent Server MUST establish the canonical semantic ordering of state transitions.
 
 Transport arrival order across different connections MUST NOT be treated as a global semantic order.
 
@@ -163,7 +183,7 @@ State mutation within a session SHOULD be serialized through one logical state m
 
 Different sessions MAY execute concurrently.
 
-The Server SHOULD assign monotonic per-session sequence numbers to committed observable state transitions.
+The Agent Server SHOULD assign monotonic per-session sequence numbers to committed observable state transitions.
 
 These sequence numbers SHOULD support:
 
@@ -183,9 +203,9 @@ The Daemon MUST be conceptually implemented as:
 
 > a long-lived Client plus daemon-specific continuity services.
 
-The Daemon's normal interaction with a Server SHOULD use the same Client SDK and Server protocol used by other Clients.
+The Daemon's normal interaction with an Agent Server SHOULD use the same Agent Client SDK and Agent Server protocol used by other Clients.
 
-The Server SHOULD NOT require special-case behavioral branches based solely on a peer being a Daemon.
+The Agent Server SHOULD NOT require special-case behavioral branches based solely on a peer being a Daemon.
 
 Authority SHOULD instead be represented through explicit capabilities or permissions.
 
@@ -195,12 +215,12 @@ Authority SHOULD instead be represented through explicit capabilities or permiss
 
 Daemon-specific services MAY include:
 
-- Server process spawning
-- Server supervision
-- Server adoption
-- Server restart
+- Agent Server process spawning
+- Agent Server supervision
+- Agent Server adoption
+- Agent Server restart
 - checkpoint requests
-- Server restoration requests
+- Agent Server restoration requests
 - background scheduling
 - background task management
 - completion hooks
@@ -211,37 +231,37 @@ The Daemon SHOULD manage concerns that must survive time or process boundaries.
 
 The Daemon MUST NOT become the authoritative live agent state machine.
 
-Daemon supervision of a Server MUST NOT transfer that Server's Model Provider or Session Store lifecycle responsibilities to the Daemon. Clients, including the Daemon, MUST NOT spawn or directly supervise Model Provider or Session Store processes.
+Daemon supervision of an Agent Server MUST NOT transfer that Agent Server's Model Provider or Session Store lifecycle responsibilities to the Daemon. Clients, including the Daemon, MUST NOT spawn or directly supervise Providers for operations routed through an Agent Server. Explicit direct CLI hosting under section 3.3 is the sole Client-side Provider-host exception. Clients and Daemons MUST NOT spawn or directly supervise Session Stores or communicate directly with them; all such access MUST remain Agent Server-mediated.
 
 ---
 
-# 6. Server Lifecycle
+# 6. Agent Server Lifecycle
 
 The system MUST support all of the following:
 
-### 6.1 Client-spawned standalone Server
+### 6.1 Client-spawned standalone Agent Server
 
-A user Client MUST be able to spawn and use a Server without any Daemon.
+A user Client MUST be able to spawn and use an Agent Server without any Daemon.
 
     Client
        ↓ spawn
-    Server
+    Agent Server
 
 ---
 
-### 6.2 Server adoption
+### 6.2 Agent Server adoption
 
-An already-running unmanaged Server MUST be capable of later becoming managed by a Daemon.
+An already-running unmanaged Agent Server MUST be capable of later becoming managed by a Daemon.
 
-Existing Client-to-Server connections SHOULD remain valid during and after adoption.
+Existing Client-to-Agent Server connections SHOULD remain valid during and after adoption.
 
 Adoption MUST NOT require routing ordinary Client traffic through the Daemon.
 
 ---
 
-### 6.3 Daemon-spawned Server
+### 6.3 Daemon-spawned Agent Server
 
-The Daemon MUST be capable of spawning a Server itself.
+The Daemon MUST be capable of spawning an Agent Server itself.
 
 ---
 
@@ -249,11 +269,11 @@ The Daemon MUST be capable of spawning a Server itself.
 
 The architecture MUST distinguish:
 
-- who spawned the Server
-- who currently supervises the Server
-- who is connected to the Server
+- who spawned the Agent Server
+- who currently supervises the Agent Server
+- who is connected to the Agent Server
 
-A Server MAY transition conceptually from:
+An Agent Server MAY transition conceptually from:
 
     UNMANAGED
         ↓
@@ -261,17 +281,19 @@ A Server MAY transition conceptually from:
 
 Adoption refers to logical supervision and MUST NOT depend on OS-level process reparenting.
 
-A managed Server's logical identity MUST survive Server process restart.
+A managed Agent Server's logical identity MUST survive Agent Server process restart.
 
 ---
 
 ## 6.5 Model Provider and Session Store lifecycle
 
-Model Provider and Session Store processes MUST be spawned by the Server. The Server MUST own their monitoring, termination, and any restart policy. Originating an operation through the Server MUST NOT give a Client or Daemon responsibility for these processes.
+For operations routed through an Agent Server, Model Provider processes MUST be spawned and supervised by that Agent Server. Originating such an operation MUST NOT give a Client or Daemon responsibility for the Provider process. In explicit direct CLI mode, the CLI instead MUST spawn and supervise its own Provider processes; they MUST remain independent of Agent Server-owned operations and runs. Each host MUST own monitoring, termination, and any restart policy for its own Provider children.
 
-Standalone operation MUST NOT require a Daemon or a pre-existing Model Provider or Session Store service. The Server MUST spawn the configured implementations rather than attach to independently running implementations. Reusing a process that the Server already spawned is distinct from depending on a pre-existing service.
+Session Store processes MUST be spawned by the Agent Server. The Agent Server alone MUST own their monitoring, termination, and any restart policy. Direct Provider hosting MUST NOT authorize Session Store access or lifecycle ownership outside the Agent Server.
 
-Standalone operation means independence from other Moly services, not necessarily offline operation. Server-spawned implementations MAY access configured external systems, such as model APIs or DynamoDB.
+Standalone Agent Server operation MUST NOT require a Daemon or a pre-existing Model Provider or Session Store service. The Agent Server MUST spawn the configured implementations rather than attach to independently running implementations. Reusing a process that the Agent Server already spawned is distinct from depending on a pre-existing service. Direct CLI operation likewise MUST NOT require an Agent Server, Daemon, or pre-existing Provider service.
+
+Standalone operation means independence from other Moly services, not necessarily offline operation. Hosted Providers MAY access configured model APIs; Agent Server-owned Session Stores MAY access configured storage services such as DynamoDB.
 
 Process lifecycle, authoritative live conversation state, and coordination of access to stored history MUST remain separate responsibilities. Component process failure or restart MUST NOT be treated as proof that an interrupted operation had no effect.
 
@@ -281,7 +303,7 @@ Process lifecycle, authoritative live conversation state, and coordination of ac
 
 ## 7.1 Canonical local IPC
 
-Local IPC SHOULD be the canonical Server transport.
+Local IPC SHOULD be the canonical Agent Server transport.
 
 On Unix-like systems, the default implementation SHOULD use:
 
@@ -299,13 +321,13 @@ The transport abstraction SHOULD expose connected byte streams compatible with a
 
 ---
 
-## 7.2 Server endpoint
+## 7.2 Agent Server endpoint
 
-A Server SHOULD normally expose one logical local endpoint.
+An Agent Server SHOULD normally expose one logical local endpoint.
 
-One Server endpoint MUST support multiple simultaneous Client connections.
+One Agent Server endpoint MUST support multiple simultaneous Client connections.
 
-The Server identity MUST NOT be derived from the endpoint path or pipe name.
+The Agent Server identity MUST NOT be derived from the endpoint path or pipe name.
 
 ---
 
@@ -382,15 +404,15 @@ EOF with an incomplete frame SHOULD be treated as a protocol error.
 
 ## 9.3 Full-duplex behavior
 
-The Client–Server protocol MUST support concurrent bidirectional operations.
+The Client–Agent Server protocol MUST support concurrent bidirectional operations.
 
 It MUST allow:
 
-    Client → Server requests
-    Server → Client responses
-    Server → Client events
-    Server → Client requests
-    Client → Server responses
+    Client → Agent Server requests
+    Agent Server → Client responses
+    Agent Server → Client events
+    Agent Server → Client requests
+    Client → Agent Server responses
 
 One outstanding request MUST NOT block unrelated requests on the same connection.
 
@@ -416,9 +438,9 @@ A Protobuf or other binary codec MAY be added without changing semantic behavior
 
 ## 10.1 Configuration ownership
 
-The Server MUST NOT discover or read user configuration files on startup.
+The Agent Server MUST NOT discover or read user configuration files on startup.
 
-A directly started Server MUST begin without reading:
+A directly started Agent Server MUST begin without reading:
 
 - user config directories
 - project config files
@@ -444,22 +466,22 @@ The expected flow is:
         ↓
     ResolvedConfig
         ↓
-    Server
+    Agent Server
         ↓
     validate
     apply
 
-The Server MUST receive resolved configuration as data.
+The Agent Server MUST receive resolved configuration as data.
 
-The Server SHOULD perform authoritative semantic validation before applying configuration.
+The Agent Server SHOULD perform authoritative semantic validation before applying configuration.
 
-Resolved configuration MUST identify the selected Model Provider and Session Store implementations and the information needed for the Server to launch them. Session Store configuration MUST identify its storage namespace/options and any credential references. The Server MUST use the supplied configuration or report a structured error; it MUST NOT discover configuration sources or silently substitute a different implementation.
+Resolved configuration MUST identify the selected Model Provider and Session Store implementations and the information needed for the Agent Server to launch them. Session Store configuration MUST identify its storage namespace/options and any credential references. The Agent Server MUST use the supplied configuration or report a structured error; it MUST NOT discover configuration sources or silently substitute a different implementation.
 
 ---
 
 ## 10.3 Configuration concurrency
 
-The active Server configuration SHOULD have a revision identifier.
+The active Agent Server configuration SHOULD have a revision identifier.
 
 Configuration updates SHOULD use optimistic revision checking so multiple Clients cannot silently overwrite each other.
 
@@ -467,23 +489,23 @@ Configuration updates SHOULD use optimistic revision checking so multiple Client
 
 # 11. Model Invocation
 
-Every LLM invocation MUST be Server-owned and issued through the Model Provider protocol.
+Every LLM invocation for an Agent Server-owned agent run MUST be Agent Server-owned and issued through MPP. Explicit direct CLI model-only chat MAY issue MPP invocations without an Agent Server under section 3.3; this exception MUST NOT transfer authority over any Agent Server session or run.
 
 This requirement concerns authority, not necessarily OS process placement.
 
-The actual request MAY execute in:
+For Agent Server-run invocations, the actual request MAY execute in:
 
-- the Server process
+- the Agent Server process
 - a provider child process
 - a model worker
-- another execution environment controlled by the Server
+- another execution environment controlled by the Agent Server
 
 However:
 
-- Clients MUST NOT independently own agent inference loops
-- the Daemon MUST NOT independently own agent inference loops
+- Clients MUST NOT independently own agentic loops; direct CLI multi-turn model-only chat is the limited exception to Agent Server-hosted model invocation, not an agentic loop
+- the Daemon MUST NOT independently own agentic loops
 
-The Server MUST retain authority over:
+For its agent runs, the Agent Server MUST retain authority over:
 
 - model-call ordering
 - context construction
@@ -499,7 +521,7 @@ The Server MUST retain authority over:
 
 ## 12.1 Provider scope
 
-A **Model Provider**, shortened to **Provider**, is a Component that adapts Moly's model semantics to an external AI service. Its interface to the Server MUST be the Model Provider protocol, not a requirement to link a particular implementation into the Server.
+A **Model Provider**, shortened to **Provider**, is a Component that adapts Moly's model semantics to an external AI service. Its interface to a host MUST be the **Moly Provider Protocol (MPP)**, not a requirement to link a particular implementation into that host. The host MAY be the Agent Server or the explicit direct CLI described in section 3.3; this does not change the Provider Component role.
 
 Providers MUST NOT be assumed to be simple `generate()` wrappers.
 
@@ -532,7 +554,7 @@ Provider implementations MUST NOT directly depend on application topology such a
 - Client type
 - hosted Tool Executor
 
-Providers SHOULD depend only on the Model Provider protocol and generic host services.
+Providers SHOULD depend only on MPP and generic host services.
 
 Generic host capabilities MAY include:
 
@@ -549,7 +571,7 @@ A Provider MUST NOT need to know which concrete implementation supplies these se
 
 Provider-specific authentication semantics SHOULD remain inside the Provider implementation.
 
-The architecture MUST allow arbitrarily provider-specific behavior without leaking that behavior into Server Core.
+The architecture MUST allow arbitrarily provider-specific behavior without leaking that behavior into Agent Server Core.
 
 User-facing interactions SHOULD be exposed through generic interaction requests such as:
 
@@ -563,14 +585,14 @@ User-facing interactions SHOULD be exposed through generic interaction requests 
 
 # 13. Inference Context and Session Affinity
 
-The Server SHOULD provide generic inference context to Providers, including identities such as:
+The MPP host SHOULD provide generic inference context to Providers, including identities such as:
 
 - SessionId
 - RunId
 - ModelCallId
 - call kind
 
-Provider-specific request metadata MUST be derived by the Provider, not Server Core.
+For Agent Server runs these identities MUST be Agent Server-owned; direct CLI identities MUST be local correlations without Agent Server session/run authority. Provider-specific request metadata MUST be derived by the Provider, not Agent Server Core or the direct CLI.
 
 Examples include:
 
@@ -604,7 +626,7 @@ The system MUST distinguish conceptually between:
 
 Executed by a Moly Executor.
 
-    Server
+    Agent Server
         ↓
     Executor
 
@@ -612,7 +634,7 @@ Executed by a Moly Executor.
 
 Executed within or by an upstream model provider.
 
-    Server
+    Agent Server
         ↓
     Provider
 
@@ -625,7 +647,7 @@ Examples of Provider Features may include:
 
 The Provider SHOULD expose availability/capability metadata.
 
-The Server decides which features are enabled for a ModelCall.
+For its agent runs, the Agent Server decides which features are enabled for a ModelCall. Direct model-only chat grants no hosted-tool execution authority.
 
 ---
 
@@ -671,13 +693,13 @@ Potential Executors include:
 
 ## 15.2 ToolRun ownership
 
-The Server MUST be authoritative for ToolRun lifecycle.
+The Agent Server MUST be authoritative for ToolRun lifecycle.
 
 The Executor MUST own the physical side effect or process.
 
 Conceptually:
 
-> Server owns execution logically.  
+> Agent Server owns execution logically.
 > Executor owns execution physically.
 
 ToolRun state MAY include:
@@ -694,15 +716,15 @@ ToolRun state MAY include:
 
 ## 15.3 Standalone execution
 
-Server Core SHOULD NOT need hard-coded side-effect execution.
+Agent Server Core SHOULD NOT need hard-coded side-effect execution.
 
-The standalone Server binary MAY compose:
+The standalone Agent Server binary MAY compose:
 
-    Server Core
+    Agent Server Core
     +
     Local Executor
 
-This MUST permit a directly invoked standalone Server to execute tools without requiring a Daemon.
+This MUST permit a directly invoked standalone Agent Server to execute tools without requiring a Daemon.
 
 The Local Executor SHOULD use the same conceptual Executor boundary as Client and Daemon executors.
 
@@ -710,7 +732,7 @@ The Local Executor SHOULD use the same conceptual Executor boundary as Client an
 
 ## 15.4 Client-provided tools
 
-The Client SDK SHOULD support dynamically providing tools to a Server.
+The Agent Client SDK SHOULD support dynamically providing tools to an Agent Server.
 
 A Client tool definition SHOULD include:
 
@@ -724,15 +746,15 @@ When invoked:
 
     model
         ↓
-    Server creates ToolRun
+    Agent Server creates ToolRun
         ↓
-    Server sends reverse execution request
+    Agent Server sends reverse execution request
         ↓
     Client executes tool
         ↓
     Client returns result/events
         ↓
-    Server commits ToolRun result
+    Agent Server commits ToolRun result
 
 This mechanism should support browser-defined tools.
 
@@ -740,7 +762,7 @@ This mechanism should support browser-defined tools.
 
 # 16. Daemon-provided Tools
 
-The Daemon SHOULD be capable of providing tools through the same Client SDK tool-hosting mechanism.
+The Daemon SHOULD be capable of providing tools through the same Agent Client SDK tool-hosting mechanism.
 
 Examples MAY include:
 
@@ -749,15 +771,15 @@ Examples MAY include:
 - agent message sending
 - agent orchestration operations
 
-Daemon-specific implementation details MUST remain outside Server Core.
+Daemon-specific implementation details MUST remain outside Agent Server Core.
 
-A daemon-provided tool MAY internally issue ordinary Client SDK commands back to the Server.
+A daemon-provided tool MAY internally issue ordinary Agent Client SDK commands back to the Agent Server.
 
 ---
 
 # 17. Background Tasks
 
-Temporal scheduling SHOULD belong to the Daemon rather than Server Core.
+Temporal scheduling SHOULD belong to the Daemon rather than Agent Server Core.
 
 Examples:
 
@@ -771,13 +793,13 @@ At execution time, the Daemon SHOULD issue ordinary Client protocol operations s
 - `run.start`
 - `message.send`
 
-The resulting agent run remains Server-owned.
+The resulting agent run remains Agent Server-owned.
 
 ---
 
 # 18. Multi-Agent Behavior
 
-The Server MUST own:
+The Agent Server MUST own:
 
 - agent identities
 - live agent state
@@ -795,11 +817,11 @@ For example:
         ↓
     Daemon sends message command
         ↓
-    Server
+    Agent Server
         ↓
     Agent B mailbox
 
-The Server SHOULD NOT hard-code arbitrary orchestration policy.
+The Agent Server SHOULD NOT hard-code arbitrary orchestration policy.
 
 ---
 
@@ -807,11 +829,11 @@ The Server SHOULD NOT hard-code arbitrary orchestration policy.
 
 ## 19.1 Ownership and scope
 
-- The Server MUST own live conversation state, history identities and ordering, execution-branch selection, context construction, and restoration semantics.
-- The Server MUST invoke discovery, saving, loading, and session-ownership operations through the Session Store protocol using the implementation selected by resolved configuration.
-- The Session Store MUST own persistence and coordinate access to stored sessions without becoming the authoritative live agent state machine. Loading returns history data for the Server to validate and activate.
-- Clients, including the Daemon, MAY originate these operations through the public Server protocol. They MUST NOT communicate directly with the Session Store or bypass the Server to mutate its authoritative history. Clients MAY handle exported history files.
-- Saving and restoring history MUST NOT require a Daemon. A Client disconnecting MUST NOT itself release the Server's session ownership or stop Server-owned persistence.
+- The Agent Server MUST own live conversation state, history identities and ordering, execution-branch selection, context construction, and restoration semantics.
+- The Agent Server MUST invoke discovery, saving, loading, and session-ownership operations through the Session Store protocol using the implementation selected by resolved configuration.
+- The Session Store MUST own persistence and coordinate access to stored sessions without becoming the authoritative live agent state machine. Loading returns history data for the Agent Server to validate and activate.
+- Clients, including the Daemon, MAY originate these operations through the public Agent Server protocol. They MUST NOT communicate directly with the Session Store or bypass the Agent Server to mutate its authoritative history. Clients MAY handle exported history files.
+- Saving and restoring history MUST NOT require a Daemon. A Client disconnecting MUST NOT itself release the Agent Server's session ownership or stop Agent Server-owned persistence.
 - Conversation history, model context, and complete runtime checkpoints MUST remain distinct concepts.
 
 ---
@@ -822,11 +844,11 @@ Session history MUST use an append-only tree of typed entries, following the app
 
 - Each entry MUST have a stable identity, an entry type, a timestamp, and a parent entry reference or an explicit root marker.
 - Entry identities and parent relationships MUST survive saving, restoration, and storage migration. They MUST NOT depend on filesystem paths, database locations, processes, or connections.
-- Parent relationships MUST be acyclic and resolvable within the session. Entry identity, ancestry, Server-assigned commit order, and timestamps MUST remain distinct; storage order or timestamps MUST NOT replace canonical semantic ordering.
+- Parent relationships MUST be acyclic and resolvable within the session. Entry identity, ancestry, Agent Server-assigned commit order, and timestamps MUST remain distinct; storage order or timestamps MUST NOT replace canonical semantic ordering.
 - Continuing from an earlier entry MUST create a new branch without deleting or modifying the abandoned path. Normal appends, branching, compaction, and context edits MUST preserve earlier logical entries.
 - Forking a selected path into another session MUST create a new session identity and preserve provenance to the source session and branch point.
 - The selected execution branch/head MUST be recorded explicitly and restored independently of physical record position. Restoration MUST NOT infer the selected branch solely from the last stored record.
-- A Client's browsing position MUST remain distinct from the Server's execution branch. Branch changes affecting execution MUST be serialized with run state changes and MUST NOT silently redirect an active run.
+- A Client's browsing position MUST remain distinct from the Agent Server's execution branch. Branch changes affecting execution MUST be serialized with run state changes and MUST NOT silently redirect an active run.
 
 ---
 
@@ -842,7 +864,7 @@ History MUST preserve supported conversation data, including:
 Additional requirements:
 
 - Attachments MUST remain available after restoration through stored content or durable references. Temporary local paths alone MUST NOT be treated as portable attachment storage.
-- Provider-specific metadata required to replay supported messages MUST be preserved as opaque data. Server Core and Session Store implementations MUST NOT need to interpret provider-specific encoding.
+- Provider-specific metadata required to replay supported messages MUST be preserved as opaque data. Agent Server Core and Session Store implementations MUST NOT need to interpret provider-specific encoding.
 - Model context MUST be derived from the selected branch and its context-affecting records, not from every entry in the stored session.
 - Compaction MUST append a summary with an explicit retained-history boundary and the prompt/tool state needed to rebuild context. It MUST NOT delete the summarized raw history.
 - Context edits MUST be recorded as branch-relative append-only operations. They MAY omit or replace content in subsequent model context but MUST preserve the original transcript and its accounting metadata.
@@ -851,6 +873,11 @@ Additional requirements:
 ---
 
 ## 19.4 History format and serialization
+
+The initial [conversation history v1 contract](conversation-history.md) defines a
+limited independently versioned snapshot representation. Its pure validator is not
+Session Store ownership, durable saving, runtime restoration, or full compliance
+with the persistence requirements below.
 
 - The canonical history schema MUST be versioned independently of Component protocols, Rust APIs, and implementation-specific storage layouts.
 - Session metadata MUST include the format version, logical session identity, and creation time. It SHOULD include a display name, workspace association, and fork provenance where applicable.
@@ -865,14 +892,14 @@ Additional requirements:
 
 A **Session Store** is a Component responsible for saved sessions, their usage/ownership status, and stored checkpoints, distinct from Model Providers and Tool Executors. Implementations MAY use a filesystem, in-memory storage, or an external storage service such as DynamoDB.
 
-- The Server MUST support interchangeable implementations through the same Session Store protocol. Client-side configuration SHOULD default to a filesystem implementation and MAY select DynamoDB or other supported implementations without changing history semantics or Client-facing operations.
+- The Agent Server MUST support interchangeable implementations through the same Session Store protocol. Client-side configuration SHOULD default to a filesystem implementation and MAY select DynamoDB or other supported implementations without changing history semantics or Client-facing operations.
 - An in-memory implementation SHOULD support hermetic tests and explicitly ephemeral sessions. It MUST NOT claim durable persistence or ownership coordination beyond its instance.
 - The Session Store protocol MUST cover session creation and discovery, metadata, paginated history reads, ordered appends, selected-head updates, persistence acknowledgments, and usage/ownership operations. Explicit history deletion SHOULD be supported subject to retention policy.
 - The session store MUST report, for each session, whether it is available for activation, in use, or of unknown availability. In use means a valid ownership claim exists under the store's ownership rules, not merely that history exists or a Client is connected. Status MUST NOT imply proof that the owning process is alive.
-- The session store MUST support atomic ownership acquisition and release. A preceding availability query MUST NOT authorize activation by itself. Competing Servers MUST NOT both acquire valid ownership of the same session within the store's coordination scope.
+- The session store MUST support atomic ownership acquisition and release. A preceding availability query MUST NOT authorize activation by itself. Competing Agent Servers MUST NOT both acquire valid ownership of the same session within the store's coordination scope.
 - Each implementation MUST define that coordination scope, ownership-loss detection, and stale-owner recovery behavior. Storage-specific locks or leases MAY implement these rules without a separate application-wide attachment registry.
-- The session store MUST reject mutations from invalidated owners. A Server that loses ownership or cannot establish its validity MUST stop initiating new session mutations and execution. After reacquiring ownership, it MUST reconcile live state with committed history before resuming work. These rules MUST NOT be interpreted as undoing physical side effects already initiated.
-- Storage-service SDK types, lock handles, and database-specific queries MUST remain behind the Session Store protocol rather than leak into canonical history or the public Server protocol. Usage status MUST be available through Server queries without exposing storage mechanisms.
+- The session store MUST reject mutations from invalidated owners. An Agent Server that loses ownership or cannot establish its validity MUST stop initiating new session mutations and execution. After reacquiring ownership, it MUST reconcile live state with committed history before resuming work. These rules MUST NOT be interpreted as undoing physical side effects already initiated.
+- Storage-service SDK types, lock handles, and database-specific queries MUST remain behind the Session Store protocol rather than leak into canonical history or the public Agent Server protocol. Usage status MUST be available through Agent Server queries without exposing storage mechanisms.
 - Storage access credentials MUST be supplied separately from saved history and portable exports. Session-store initialization and remote access MUST preserve the lazy CLI startup requirements in section 3.2.
 - Third-party implementations MUST be substitutable through the Session Store protocol as specified in section 25.
 
@@ -888,28 +915,28 @@ A **Session Store** is a Component responsible for saved sessions, their usage/o
 - Storage failures MUST distinguish absence, access denial, unavailability, conflict, corruption, and uncertain write outcomes. Failure MUST NOT be presented as an empty conversation or a successful save.
 - Ephemeral operation MUST be an explicit policy. Storage failure MUST NOT silently downgrade a persistent session to ephemeral operation.
 
-Sharing stored data MUST NOT be equated with sharing a running Session Store process. If independent Servers access the same stored sessions, their Session Store implementations MUST coordinate ownership within the declared scope. This coordination MUST NOT require a Daemon or transfer live conversation authority out of the Server. The coordination mechanism MUST remain behind the Session Store protocol; no particular shared-process or storage-primitive design is required by this contract.
+Sharing stored data MUST NOT be equated with sharing a running Session Store process. If independent Agent Servers access the same stored sessions, their Session Store implementations MUST coordinate ownership within the declared scope. This coordination MUST NOT require a Daemon or transfer live conversation authority out of the Agent Server. The coordination mechanism MUST remain behind the Session Store protocol; no particular shared-process or storage-primitive design is required by this contract.
 
 ---
 
 ## 19.7 Discovery and restoration
 
-- Clients MUST request saved-session discovery, usage status, and restoration through the Server. The Server MUST obtain this information from the configured Session Store, not infer usage from Client connection counts. The Server MUST return the requested session information to the requesting Client through the public Server protocol.
+- Clients MUST request saved-session discovery, usage status, and restoration through the Agent Server. The Agent Server MUST obtain this information from the configured Session Store, not infer usage from Client connection counts. The Agent Server MUST return the requested session information to the requesting Client through the public Agent Server protocol.
 - Users MUST be able to list, open, and resume saved conversations by logical identity. Discovery SHOULD support names, workspace association, and recent activity without requiring users to know storage-specific paths or keys.
-- Before activating restored history for live use, the Server MUST acquire ownership through the configured session store and load a consistent committed revision under that ownership. A session owned by another Server MUST yield an explicit in-use result rather than an independent writable copy. Unknown availability MUST NOT be treated as available.
-- If the session is already active in the requesting Server, ordinary open/resume requests MUST reuse its live state rather than replace it with older persisted data. Explicit replacement MUST be coordinated with active runs and state revisions, and affected Clients MUST be notified.
+- Before activating restored history for live use, the Agent Server MUST acquire ownership through the configured session store and load a consistent committed revision under that ownership. A session owned by another Agent Server MUST yield an explicit in-use result rather than an independent writable copy. Unknown availability MUST NOT be treated as available.
+- If the session is already active in the requesting Agent Server, ordinary open/resume requests MUST reuse its live state rather than replace it with older persisted data. Explicit replacement MUST be coordinated with active runs and state revisions, and affected Clients MUST be notified.
 - Restoration MUST preserve session identity, raw history, branch relationships, the selected head, and recorded context-affecting state. Creating a new identity from existing history MUST be an explicit fork or copy operation.
 - Listing, reading, and restoring history MUST NOT require a working model provider or model credentials. Continuing inference MAY require provider configuration, credentials, and available tools.
 - Unavailable models, tools, attachments, or required replay metadata MUST be reported explicitly. The system MUST NOT silently rewrite history or substitute execution capabilities to make a restored conversation appear complete.
 - Restoring a conversation MUST NOT itself invoke a model, execute tools, revive connections or executor leases, or resume physical side effects.
-- Interrupted runs and tool calls with unestablished outcomes MUST remain distinguishable from completed work. Any execution recovery MUST follow an explicit Server-owned policy rather than treating a missing result as permission to repeat a side effect.
+- Interrupted runs and tool calls with unestablished outcomes MUST remain distinguishable from completed work. Any execution recovery MUST follow an explicit Agent Server-owned policy rather than treating a missing result as permission to repeat a side effect.
 
 For example, session discovery follows:
 
-    Client / Daemon → list sessions → Server → list sessions → Session Store
-    Client / Daemon ← response      ← Server ← response      ← Session Store
+    Client / Daemon → list sessions → Agent Server → list sessions → Session Store
+    Client / Daemon ← response      ← Agent Server ← response      ← Session Store
 
-The Client or Daemon originates this operation. If a Session Store process needs to be spawned to serve it, the Server spawns that process. Neither request forwarding nor process spawning implies a new handshake for every operation.
+The Client or Daemon originates this operation. If a Session Store process needs to be spawned to serve it, the Agent Server spawns that process. Neither request forwarding nor process spawning implies a new handshake for every operation.
 
 ---
 
@@ -926,8 +953,8 @@ The Client or Daemon originates this operation. If a Session Store process needs
 
 ## 19.9 Runtime checkpoints
 
-- The Server MUST define complete runtime checkpoint and restoration semantics separately from conversation-history reconstruction.
-- The Server SHOULD store and load its checkpoints through the Session Store protocol without requiring implementations to understand internal live-state semantics. A Daemon MAY request checkpointing or restoration as an ordinary Client.
+- The Agent Server MUST define complete runtime checkpoint and restoration semantics separately from conversation-history reconstruction.
+- The Agent Server SHOULD store and load its checkpoints through the Session Store protocol without requiring implementations to understand internal live-state semantics. A Daemon MAY request checkpointing or restoration as an ordinary Client.
 - Checkpoints MUST identify the state revision and history boundary they represent. Durable checkpoint acknowledgments MAY identify the corresponding sequence numbers.
 - A Session Store implementation MAY also store checkpoints, but saving a conversation MUST NOT imply that agent mailboxes, active runs, processes, or executor state can be resumed.
 
@@ -940,7 +967,7 @@ Every persistent Session Store implementation MUST pass a shared, implementation
 - save/load round trips, discovery, pagination, and metadata
 - branch selection, forking, compaction, context edits, and attachment preservation
 - implementation selection from supplied configuration without implicit discovery or fallback
-- Server-mediated discovery and responses, with Server-owned process spawning
+- Agent Server-mediated discovery and responses, with Agent Server-owned process spawning
 - available/in-use/unknown status, competing ownership claims, release, and stale-owner fencing
 - revision conflicts, duplicate retries, uncertain outcomes, and partial-write recovery
 - corruption and unsupported-version handling
@@ -953,9 +980,9 @@ History fixtures and session-store conformance tests MUST survive implementation
 
 # 20. Remote Access
 
-The Server SHOULD fundamentally expose a local protocol.
+The Agent Server SHOULD fundamentally expose a local protocol.
 
-Remote exposure SHOULD normally be implemented outside Server Core.
+Remote exposure SHOULD normally be implemented outside Agent Server Core.
 
 Preferred structure:
 
@@ -965,7 +992,7 @@ Preferred structure:
         ↓
     local IPC
         ↓
-    Server
+    Agent Server
 
 The remote Gateway MAY own:
 
@@ -978,7 +1005,7 @@ The remote Gateway MAY own:
 - audit
 - WebSocket/HTTP adaptation
 
-Server Core SHOULD receive normalized identity/capability context rather than provider-specific remote authentication logic.
+Agent Server Core SHOULD receive normalized identity/capability context rather than provider-specific remote authentication logic.
 
 Direct TCP support MAY exist as an optional transport implementation.
 
@@ -1008,7 +1035,7 @@ Rust library/internal modules MUST emit tracing events/spans but MUST NOT instal
 
 Each Rust executable MUST configure its own subscriber. Implementations in other languages MAY use their native logging facilities without depending on Rust.
 
-Client, Server, Daemon, Model Provider, and Session Store logging SHOULD remain independently configurable.
+Client, Agent Server, Daemon, Model Provider, and Session Store logging SHOULD remain independently configurable.
 
 Shared correlation identifiers SHOULD include relevant IDs such as:
 
@@ -1045,7 +1072,7 @@ Developer-facing programmatic APIs.
 
 ## Protocol
 
-Process/language boundaries and wire semantics, including the Client–Server, Model Provider, and Session Store protocols. These are extension contracts for independent implementations, not Rust API or native ABI compatibility promises.
+Process/language boundaries and wire semantics, including the Client–Agent Server protocol, MPP, and the Session Store protocol. These are extension contracts for independent implementations, not Rust API or native ABI compatibility promises.
 
 ## Persistence
 
@@ -1059,11 +1086,13 @@ Crates SHOULD be classified by compatibility surface rather than merely implemen
 
 ---
 
-# 24. Client SDK Layers
+# 24. SDK Responsibilities
 
-Client APIs SHOULD be layered by responsibility, with the capabilities described below.
+## 24.1 Agent Client SDK layers
 
-## Protocol/schema
+The Agent Client SDK accesses the Agent Server protocol. It MUST NOT spawn processes or own an agentic loop; application process-startup policy remains outside the SDK. Client APIs SHOULD be layered by responsibility, with the capabilities described below.
+
+### Protocol/schema
 
 Provides:
 
@@ -1072,7 +1101,7 @@ Provides:
 - version definitions
 - error definitions
 
-## Wire Client
+### Wire Client
 
 Provides:
 
@@ -1082,7 +1111,7 @@ Provides:
 - event streaming
 - multiplexing
 
-## Headless Client
+### Headless Client
 
 Provides higher-level concepts:
 
@@ -1097,17 +1126,25 @@ Browser, CLI, IDE integrations, and Daemon SHOULD be built on the headless Clien
 
 These layers do not all need separate crates until real dependency boundaries justify them.
 
+## 24.2 MPP host SDK
+
+A separate common MPP host SDK SHOULD support the Agent Server and explicit direct CLI without depending on either executable or the Agent Client SDK. It MUST communicate with independent Provider peers through MPP rather than import Provider executable implementations.
+
+The MPP SDK MAY launch and supervise an explicitly resolved Provider command. Its transport MUST remain private. Configuration discovery, credential persistence, UI, conversation history, tool effects, and agent/run policy MUST remain host responsibilities. It MUST NOT own an agentic loop, become an agent runtime, or act as a Session Store client.
+
+The host MUST own credential slots and serialize every operation sharing a renewable credential for the full operation. Scoped replacements MUST remain committed even if the surrounding operation later fails or is cancelled. The SDK MUST NOT own a secret store.
+
 ---
 
 # 25. Model Provider and Session Store Extension Surfaces
 
 Model Providers and Session Stores MUST support third-party implementations through their respective versioned, schema-defined protocols.
 
-An independent developer MUST be able to implement either Component in another programming language and configure the Server to use it without rebuilding the Server. Cross-language communication MUST use protocol messages, with JSON support as specified in section 9, without requiring Rust linkage, WASM, a C ABI, or a dynamic-library ABI.
+An independent developer MUST be able to implement either Component in another programming language and configure the Agent Server to use it without rebuilding the Agent Server. An independent Provider MUST also be usable by an explicitly configured direct CLI through MPP without rebuilding the CLI; this MUST NOT extend direct access to Session Stores. Cross-language communication MUST use protocol messages, with JSON support as specified in section 9, without requiring Rust linkage, WASM, a C ABI, or a dynamic-library ABI.
 
 Bundled implementations MUST preserve the same replaceable protocol contracts. Compile-time registration or a language-specific plugin API alone MUST NOT satisfy this extension requirement.
 
-Model Provider protocol APIs SHOULD remain experimental until multiple substantially different implementations have exercised them. Experimental protocols MUST still document their schemas, semantics, versions, and compatibility rules; cross-language extensibility does not imply a permanent stability guarantee.
+MPP APIs SHOULD remain experimental until multiple substantially different implementations have exercised them. Experimental protocols MUST still document their schemas, semantics, versions, and compatibility rules; cross-language extensibility does not imply a permanent stability guarantee.
 
 ---
 
@@ -1117,17 +1154,20 @@ Crate count SHOULD be minimized until real dependency or compatibility boundarie
 
 Crate responsibilities SHOULD be separated as follows:
 
-- `moly-protocol`: shared wire/schema contract.
-- `moly-server`: Server implementation, with Server Core, Model Provider protocol integration, Executor integration, and Server-side transport kept as internal modules until real independent consumers justify extraction.
-- `moly`: user-facing CLI Client.
+- `moly-protocol`: shared wire/schema contract, with no transport or executable implementation dependencies.
+- `moly-client`: Agent Client SDK, with private Agent Server-protocol transport and no process spawning.
+- `moly-provider-client`: common MPP host SDK, with private Provider transport and explicit Provider process supervision; no agentic loop or secret store.
+- `moly-server`: Agent Server executable, with Agent Server Core, credential authority, Executor integration, and Agent Server-side transport kept internal; uses protocol and the MPP host SDK, never the Agent Client SDK.
+- `moly`: user-facing CLI executable; uses the Agent Client SDK for Agent Server access and the MPP host SDK only for explicit direct mode.
+- Bundled Providers: binary-only, independent MPP implementations; upstream HTTP and OAuth remain inside those executables.
 
-The CLI MUST communicate with the Server through the public protocol and MUST NOT depend directly on `moly-server` implementation APIs.
+Both SDKs MUST depend only on `moly-protocol` among project crates. Executables MUST NOT depend on another executable's implementation, including for tests or by source inclusion. The CLI MUST communicate with the Agent Server through the public protocol and MUST NOT depend directly on `moly-server` implementation APIs.
 
-A dedicated internal session-store crate MUST encapsulate the Server's Session Store protocol client rather than require storage implementations to be linked into the Server. It MUST NOT depend on executable internals or the Client SDK. Clients MUST access these capabilities through the Server protocol rather than bypassing the Server through that crate.
+A dedicated internal session-store crate MUST encapsulate the Agent Server's Session Store protocol client rather than require storage implementations to be linked into the Agent Server. It MUST NOT depend on executable internals or the Client SDK. Clients MUST access these capabilities through the Agent Server protocol rather than bypassing the Agent Server through that crate.
 
 Rust crate organization MUST NOT impose Rust dependencies on independently implemented Model Providers or Session Stores. Their extension boundary MUST remain the language-neutral protocol; Component boundaries do not prescribe one crate or executable per implementation.
 
-A separate `moly-client` crate SHOULD be extracted only when multiple real Client consumers, such as the Daemon, justify the shared dependency.
+The Agent Client SDK and MPP host SDK MUST remain distinct responsibilities: Agent Server session/run access is not direct Provider access. Their separation MUST NOT require independently implemented Providers or Session Stores to use Rust.
 
 ---
 
@@ -1213,7 +1253,7 @@ The initial implementation does NOT need:
 - mandatory WASM
 - mandatory Protobuf
 - mandatory Daemon
-- Server-side config file discovery
+- Agent Server-side config file discovery
 
 These MAY be revisited only when concrete requirements justify them.
 
@@ -1229,14 +1269,14 @@ Recommended initial composition:
         ↓
     local IPC
         ↓
-    Server Binary
-        ├ Server Core
+    Agent Server Binary
+        ├ Agent Server Core
         └ Local Executor
 
 It SHOULD demonstrate:
 
 - immediate CLI rendering
-- lazy Server startup
+- lazy Agent Server startup
 - local IPC
 - JSONL framing
 - handshake
@@ -1247,7 +1287,7 @@ It SHOULD demonstrate:
 - one local Tool Executor
 - configuration supplied by Client
 - structured tracing
-- clean Client/Server protocol boundary
+- clean Client/Agent Server protocol boundary
 
 Daemon functionality SHOULD be added after this path works and the first architectural pressures are observable.
 
@@ -1257,34 +1297,34 @@ Daemon functionality SHOULD be added after this path works and the first archite
 
 The following summarize the core requirements above:
 
-1. Server is the authoritative live state machine.
-2. Server is multi-client.
+1. Agent Server owns the agentic loop and is the authoritative live state machine for agent execution; direct model-only chat is not an Agent Server runtime.
+2. Agent Server is multi-client.
 3. Daemon is a Client plus continuity services.
-4. Client, Server, Daemon, Model Provider, and Session Store remain logically distinct protocol participants.
-5. Server does not discover configuration files.
-6. Client or Daemon sends resolved configuration to Server.
-7. Every LLM invocation is Server-owned.
+4. Client, Agent Server, Daemon, Model Provider, and Session Store remain logically distinct protocol participants.
+5. Agent Server does not discover configuration files.
+6. Client or Daemon sends resolved configuration to Agent Server.
+7. Every LLM invocation for an Agent Server run is Agent Server-owned; explicit direct CLI model-only chat uses MPP without taking over Agent Server authority.
 8. Provider-specific complexity stays behind Provider boundaries.
 9. Provider does not know Client/Daemon topology.
 10. Hosted tools and provider-native features are distinct.
-11. Server owns ToolRun state.
+11. Agent Server owns ToolRun state.
 12. Executor owns physical side effects.
-13. Standalone Server may bundle a Local Executor.
+13. Standalone Agent Server may bundle a Local Executor.
 14. Clients may provide tools.
-15. Daemon may provide tools through the Client SDK.
+15. Daemon may provide tools through the Agent Client SDK.
 16. Protocol semantics are independent of transport.
 17. JSONL is an initial encoding, not an architectural dependency.
-18. Semantic ordering is established by Server state transitions.
+18. Semantic ordering is established by Agent Server state transitions.
 19. Logical IDs are independent from OS resources.
 20. Internal implementation may be rewritten freely.
 21. Public protocol behavior and conformance assets should survive rewrites.
 22. Conversation history is an append-only tree; model context is a derived view, not a replacement for history.
-23. The Server invokes a replaceable Session Store through its protocol using Client-supplied configuration; Clients and Daemons access it only through the Server.
+23. The Agent Server invokes a replaceable Session Store through its protocol using Client-supplied configuration; Clients and Daemons access it only through the Agent Server.
 24. Restoring conversation history does not implicitly resume runs or repeat physical side effects.
 25. Session Stores report usage and coordinate exclusive ownership; Client attachment is not ownership.
-26. Only the Server spawns and directly supervises Model Provider and Session Store processes; standalone operation requires neither a Daemon nor pre-existing Component services.
+26. The Agent Server spawns and supervises Providers for operations routed through it; an explicit direct CLI hosts only its own Providers. Session Store processes and access remain Agent Server-only. Neither path requires a Daemon or pre-existing Component services.
 27. Operation origination, process spawning, and handshake initiation are separate concepts.
-28. Model Provider and Session Store protocols support cross-language implementations without rebuilding the Server or requiring WASM or a native ABI.
+28. MPP and Session Store protocols support cross-language implementations without rebuilding the Agent Server or requiring WASM or a native ABI; MPP also permits explicit direct CLI hosting without changing Provider roles.
 
 These requirements are intentionally subject to revision when implementation experience reveals that an underlying assumption is incorrect.
 

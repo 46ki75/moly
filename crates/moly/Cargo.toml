@@ -12,6 +12,7 @@ stability = "experimental"
 
 [dependencies]
 moly-client.workspace = true
+moly-provider-client.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

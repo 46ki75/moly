@@ -5,17 +5,26 @@ Humans and agents must read this guide before changing code.
 ## Rules
 
 - Preserve [ownership boundaries](docs/architecture.md) and
-  [wire semantics](docs/protocol.md), not implementation structure.
-- Keep `moly`, `moly-server`, and `moly-provider-openai` binary-only with private
-  implementation modules.
-  The CLI depends on `moly-client`, whose only project dependency is `moly-protocol`.
-  The Server depends only on protocol, never the SDK. No cross-role Rust dependencies,
-  even for tests, or production source-inclusion shortcuts. Bundled Providers depend
-  only on protocol, never Server internals; HTTP belongs in the Provider executable.
-  Keep SDK transport private; process spawning, config discovery, and provider work
-  do not belong in the SDK.
+  [wire semantics](docs/protocol.md), not implementation structure. Agent Server is
+  the component name and owns the agentic loop; older Server terminology aliases
+  it. Keep `moly-server`, Rust symbols, wire identifiers, schema IDs/filenames, and
+  protocol versions unchanged for compatibility.
+- Keep `moly`, `moly-server`, `moly-provider-openai`, and
+  `moly-provider-openai-codex` binary-only with private implementation modules.
+  The CLI uses `moly-client` for Agent Server access and `moly-provider-client` for
+  explicit direct MPP access. The Agent Server uses protocol and the MPP host SDK,
+  never the Agent Client SDK. Both SDKs depend only on `moly-protocol` among project crates. No
+  executable implementation dependencies, even for tests, or production source-inclusion
+  shortcuts. Bundled Providers depend only on protocol; upstream HTTP/OAuth belongs
+  in Provider executables. SDK transports stay private. The MPP SDK may explicitly
+  launch/supervise a resolved Provider command; the Agent Client SDK never spawns
+  processes. Neither SDK discovers configuration, owns UI/credential persistence,
+  or runs an agentic loop. Direct CLI mode remains model-only chat/authentication,
+  without an agentic loop; Session Store access remains Agent Server-only and is
+  not implemented yet.
 - Verify failures before fixing them; add deterministic, hermetic regression tests.
-  No credentials or live providers in the ordinary test suite.
+  No credentials or live providers in the ordinary test suite. OAuth fixtures must
+  use local authorization/token/JWKS services; passing them is not live-service validation.
 - Never log prompts, tool arguments/results, credentials, or provider bodies.
   Library crates emit tracing; executable roots install subscribers on stderr.
 - Document public Rust items. Use typed recoverable errors; no `unwrap()`.
@@ -42,10 +51,11 @@ mise run --silent check
 
 Rerun a failed task without `--silent` for full diagnostics. `check` is the same
 quality gate used by CI: formatting, Clippy, nextest, and library doctests, with
-locked dependencies. The test task first builds all three executables: SDK and CLI
-fixtures launch `moly-server`, which alone spawns Providers. Tests never import
+locked dependencies. The test task first builds all four executables. Agent Server-path
+fixtures launch `moly-server`, which owns its Providers; direct CLI/MPP SDK fixtures
+host independent Provider processes without an Agent Server. Tests never import
 executable internals across roles. Python 3 is required for cross-language Provider
-conformance (no external Python packages). For direct test invocations, build Server
+conformance (no external Python packages). For direct test invocations, build Agent Server
 and Provider first, or set test-only `MOLY_TEST_SERVER_BIN` and
 `MOLY_TEST_PROVIDER_BIN` overrides (see [conformance](conformance/README.md)).
 

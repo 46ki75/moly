@@ -1,45 +1,45 @@
-//! Experimental Model Provider protocol v1, carried by the common envelope v1.
-//! See `docs/model-provider-protocol.md` and `conformance/schemas/model-provider-v1.json`.
+//! Experimental Moly Provider Protocol (MPP) v2, carried by envelope v1.
+//! See `docs/model-provider-protocol.md` and `conformance/schemas/model-provider-v2.json`.
 use crate::{ModelCallId, RunId, SessionId, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// Independently versioned Model Provider semantics.
-pub const PROVIDER_VERSION: u16 = 1;
+/// Independently versioned Moly Provider Protocol (MPP) semantics.
+pub const PROVIDER_VERSION: u16 = 2;
 
-/// Resolved process launch data. The Server never searches PATH or invokes a shell.
+/// Resolved process launch data. An MPP host never searches PATH or invokes a shell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComponentCommand {
-    /// Absolute executable path, resolved by the Client.
+    /// Absolute executable path, resolved by the host application.
     pub executable: String,
     /// Literal arguments, without shell expansion.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Complete explicitly supplied environment, not inherited Server configuration.
+    /// Complete explicitly supplied environment, not inherited host configuration.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 
-/// Client-selected implementation and implementation-specific configuration.
+/// Explicitly selected implementation and implementation-specific configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    /// How the Server launches this implementation.
+    /// How the host launches this implementation.
     pub command: ComponentCommand,
     /// Opaque provider options. The selected implementation validates their semantics.
     pub options: Value,
 }
 
-/// Handshake result. The Server checks both role and semantic version.
+/// Handshake result. The host checks both role and semantic version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInitialized {
     /// Must be `model_provider` for this protocol.
     pub role: String,
-    /// Accepted Model Provider version.
+    /// Accepted MPP version.
     pub protocol_version: u16,
 }
 
-/// Purpose of one Server-authorized inference step.
+/// Purpose of one host-authorized inference step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallKind {
@@ -54,13 +54,13 @@ pub struct InferenceContext {
     pub session_id: SessionId,
     /// Owning live run.
     pub run_id: RunId,
-    /// Unique Server-authorized inference step.
+    /// Unique host-authorized inference step.
     pub model_call_id: ModelCallId,
     /// Purpose of this step.
     pub call_kind: CallKind,
 }
 
-/// Provider-owned replay data, never interpreted by Core.
+/// Provider-owned replay data, never interpreted by the host's agent logic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderMetadata {
     /// Identifies the representation, not the process that produced it.
@@ -114,11 +114,11 @@ pub struct ModelRequest {
     pub options: Value,
     /// Value resolved from the selected secret reference only; not persisted.
     pub credential: Option<String>,
-    /// Server-assigned authority and tracing identities.
+    /// Host-assigned authority and tracing identities.
     pub context: InferenceContext,
     /// Selected model context, not the entire history tree.
     pub messages: Vec<ModelMessage>,
-    /// Hosted capabilities currently authorized by the Server.
+    /// Hosted capabilities currently authorized by the host.
     pub tools: Vec<ToolDefinition>,
 }
 
@@ -133,7 +133,7 @@ pub enum ModelStep {
         /// Opaque replay information.
         metadata: Option<ProviderMetadata>,
     },
-    /// Server must assign ToolRun authority before executing these calls.
+    /// The host must authorize execution; a Server assigns ToolRun authority.
     AwaitHostTools {
         /// Optional accompanying assistant text.
         text: Option<String>,

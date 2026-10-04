@@ -8,7 +8,7 @@ use tokio::{
     process::{Child, Command},
 };
 
-use super::TestError;
+type TestError = Box<dyn std::error::Error + Send + Sync>;
 
 pub(super) struct AuditedServer {
     child: Child,

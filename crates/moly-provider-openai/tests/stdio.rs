@@ -3,7 +3,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use moly_protocol::{Body, Message};
+use moly_protocol::{Body, Message, model::PROVIDER_VERSION};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -51,9 +51,15 @@ async fn receive(output: &mut BufReader<ChildStdout>) -> Result<Message, TestErr
 #[tokio::test]
 async fn binary_handshake_validate_unknown_method_and_clean_eof() -> TestResult {
     let (mut child, mut input, mut output) = spawn()?;
-    send(&mut input, 1, "initialize", json!({"protocol_version": 1})).await?;
+    send(
+        &mut input,
+        1,
+        "initialize",
+        json!({"protocol_version": PROVIDER_VERSION}),
+    )
+    .await?;
     assert!(
-        matches!(receive(&mut output).await?.body, Body::Response { id: 1, result } if result == json!({"role": "model_provider", "protocol_version": 1}))
+        matches!(receive(&mut output).await?.body, Body::Response { id: 1, result } if result == json!({"role": "model_provider", "protocol_version": PROVIDER_VERSION}))
     );
     send(
         &mut input,
@@ -81,6 +87,18 @@ async fn binary_handshake_validate_unknown_method_and_clean_eof() -> TestResult 
     assert!(
         matches!(response.body, Body::Error { id: Some(3), error } if error.code == "unknown_method")
     );
+    send(
+        &mut input,
+        4,
+        "provider.auth",
+        json!({"operation": "login", "credential": "private-auth-sentinel"}),
+    )
+    .await?;
+    let response = receive(&mut output).await?;
+    assert!(!serde_json::to_string(&response)?.contains("private-auth-sentinel"));
+    assert!(
+        matches!(response.body, Body::Error { id: Some(4), error } if error.code == "auth_unsupported")
+    );
     drop(input);
     assert!(
         tokio::time::timeout(Duration::from_secs(2), child.wait())
@@ -100,7 +118,13 @@ async fn binary_exits_promptly_on_stdin_eof_while_http_is_running() -> TestResul
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let endpoint = format!("http://{}/private-endpoint", listener.local_addr()?);
         let (mut child, mut input, mut output) = spawn()?;
-        send(&mut input, 1, "initialize", json!({"protocol_version": 1})).await?;
+        send(
+            &mut input,
+            1,
+            "initialize",
+            json!({"protocol_version": PROVIDER_VERSION}),
+        )
+        .await?;
         receive(&mut output).await?;
         send(
             &mut input,

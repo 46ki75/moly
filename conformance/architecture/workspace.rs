@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path, process::Command};
 
 #[test]
-fn client_sdk_does_not_couple_cli_and_server() -> Result<(), Box<dyn std::error::Error>> {
+fn application_hosts_share_mpp_sdk_without_linking_executables()
+-> Result<(), Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new(env!("CARGO"))
         .args([
@@ -31,14 +32,18 @@ fn client_sdk_does_not_couple_cli_and_server() -> Result<(), Box<dyn std::error:
             "moly-client",
             "moly-protocol",
             "moly-server",
-            "moly-provider-openai"
+            "moly-provider-client",
+            "moly-provider-openai",
+            "moly-provider-openai-codex"
         ])
     );
     for (role, expected) in [
-        ("moly", vec!["moly-client"]),
+        ("moly", vec!["moly-client", "moly-provider-client"]),
         ("moly-client", vec!["moly-protocol"]),
-        ("moly-server", vec!["moly-protocol"]),
+        ("moly-server", vec!["moly-protocol", "moly-provider-client"]),
+        ("moly-provider-client", vec!["moly-protocol"]),
         ("moly-provider-openai", vec!["moly-protocol"]),
+        ("moly-provider-openai-codex", vec!["moly-protocol"]),
         ("moly-protocol", vec![]),
     ] {
         let package = packages
@@ -58,7 +63,8 @@ fn client_sdk_does_not_couple_cli_and_server() -> Result<(), Box<dyn std::error:
             "{role} must preserve role boundaries, including test dependencies"
         );
         let targets = package["targets"].as_array().ok_or("missing targets")?;
-        if matches!(role, "moly" | "moly-server" | "moly-provider-openai") {
+        let provider = matches!(role, "moly-provider-openai" | "moly-provider-openai-codex");
+        if matches!(role, "moly" | "moly-server") || provider {
             assert!(
                 targets
                     .iter()
@@ -77,9 +83,22 @@ fn client_sdk_does_not_couple_cli_and_server() -> Result<(), Box<dyn std::error:
                     .any(|target| target["kind"] == json!(["lib"]))
             );
         }
-        if role != "moly-provider-openai" {
+        if !provider {
             assert!(
-                !dependencies.iter().any(|d| d["name"] == "reqwest"),
+                !dependencies.iter().any(|d| matches!(
+                    d["name"].as_str(),
+                    Some(
+                        "reqwest"
+                            | "http"
+                            | "hyper"
+                            | "hyper-util"
+                            | "h2"
+                            | "ureq"
+                            | "surf"
+                            | "awc"
+                            | "isahc"
+                    )
+                )),
                 "model HTTP belongs behind the Provider protocol, not in Server or Client"
             );
         }

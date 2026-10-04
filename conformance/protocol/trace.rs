@@ -14,7 +14,7 @@ type TestError = Box<dyn Error + Send + Sync>;
 const TRACE: &str = include_str!("../traces/hosted-tool-duplex-replay.jsonl");
 
 // Keep the original v1 asset and its exact schema, even though live Servers now
-// negotiate v2 configuration. Envelope, tool leases, and event ordering survive.
+// negotiate v3 authentication. Envelope, tool leases, and event ordering survive.
 #[derive(Deserialize, Serialize)]
 struct LegacyConfig {
     model_endpoint: String,

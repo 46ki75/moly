@@ -1,4 +1,4 @@
-"""Independent stdlib Provider v1 peer; only the Server launches this fixture.
+"""Independent stdlib MPP v2 peer; the tested host launches this fixture.
 
 The audit is local test evidence, deliberately containing fake sensitive data.
 No production Python/Rust implementation, HTTP service, or SDK is imported.
@@ -121,7 +121,7 @@ def step(request):
             respond(request, completed("second turn complete"))
     else:
         respond(request, completed("independent provider complete"))
-    # Do not exit voluntarily after replying; the Server owns invocation cleanup.
+    # Do not exit voluntarily after replying; the host owns invocation cleanup.
     sys.stdin.buffer.read()
     return gate
 
@@ -130,9 +130,9 @@ def main():
     print(STDERR_SENTINEL, file=sys.stderr, flush=True)
     initialize = receive()
     assert initialize["method"] == "initialize"
-    assert initialize["params"] == {"protocol_version": 1}
+    assert initialize["params"] == {"protocol_version": 2}
     role = "wrong_role" if SCENARIO == "bad_role" else "model_provider"
-    version = 2 if SCENARIO == "bad_version" else 1
+    version = 1 if SCENARIO == "bad_version" else 2
     envelope_version = 2 if SCENARIO == "bad_envelope_version" else 1
     initialized = [role, version] if SCENARIO == "bad_handshake_array" else {"role": role, "protocol_version": version}
     respond(initialize, initialized, version=envelope_version)

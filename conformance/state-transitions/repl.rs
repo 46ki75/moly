@@ -87,7 +87,7 @@ impl Cli {
 
     async fn session(&mut self, server: &ServerProcess) -> Result<SessionId, TestError> {
         let line = self.diagnostic().await?;
-        assert!(line.starts_with(&format!("Server {} at ", server.server_id)));
+        assert!(line.starts_with(&format!("Agent Server {} at ", server.server_id)));
         let (_, id) = line
             .trim_end()
             .rsplit_once("; session ")
@@ -297,7 +297,11 @@ async fn idle_server_loss_exits_even_while_stdin_is_open() -> Result<(), TestErr
             "stdin must remain open through process exit"
         );
         assert!(!cli.child.wait().await?.success());
-        assert!(cli.diagnostic().await?.contains("Server disconnected"));
+        assert!(
+            cli.diagnostic()
+                .await?
+                .contains("Agent Server disconnected")
+        );
         observer.close();
         Ok::<_, TestError>(())
     })

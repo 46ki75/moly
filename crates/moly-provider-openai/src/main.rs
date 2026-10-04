@@ -1,4 +1,4 @@
-//! Bundled OpenAI-compatible Model Provider v1 executable.
+//! Bundled OpenAI-compatible Model Provider v2 executable.
 
 mod provider;
 mod service;

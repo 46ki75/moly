@@ -11,7 +11,8 @@ stability = "experimental"
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+# Opaque history values must survive encoding/decoding without float rounding drift.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 uuid.workspace = true
 
 [lints]

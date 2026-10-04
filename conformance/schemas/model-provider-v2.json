@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:moly:model-provider:2",
+  "title": "Moly Provider Protocol (MPP) v2 (envelope v1)",
+  "$ref": "#/$defs/Envelope",
+  "$defs": {
+    "RequestId": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "Identity": {"type": "string", "format": "uuid"},
+    "Envelope": {
+      "type": "object", "required": ["version", "type"],
+      "properties": {"version": {"const": 1}},
+      "oneOf": [
+        {"required": ["id", "method"], "properties": {"type": {"const": "request"}, "id": {"$ref": "#/$defs/RequestId"}, "method": {"type": "string"}, "params": {}}},
+        {"required": ["id", "result"], "properties": {"type": {"const": "response"}, "id": {"$ref": "#/$defs/RequestId"}, "result": {}}},
+        {"required": ["error"], "properties": {"type": {"const": "error"}, "id": {"oneOf": [{"$ref": "#/$defs/RequestId"}, {"type": "null"}]}, "error": {"$ref": "#/$defs/Error"}}}
+      ]
+    },
+    "Error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}},
+    "Initialize": {"type": "object", "required": ["protocol_version"], "properties": {"protocol_version": {"const": 2}}},
+    "Initialized": {"type": "object", "required": ["role", "protocol_version"], "properties": {"role": {"const": "model_provider"}, "protocol_version": {"const": 2}}},
+    "Command": {
+      "type": "object", "required": ["executable"],
+      "properties": {
+        "executable": {"type": "string", "minLength": 1, "description": "Absolute path on the invoking host; no PATH or shell resolution."},
+        "args": {"type": "array", "maxItems": 128, "items": {"type": "string"}, "default": []},
+        "env": {"type": "object", "maxProperties": 128, "additionalProperties": {"type": "string"}, "default": {}}
+      }
+    },
+    "ProviderConfig": {"type": "object", "required": ["command", "options"], "properties": {"command": {"$ref": "#/$defs/Command"}, "options": {}}},
+    "ResolvedConfig": {
+      "description": "Client–Server v3 configuration using an MPP v2 implementation.",
+      "type": "object", "required": ["provider", "workspace"],
+      "properties": {"provider": {"$ref": "#/$defs/ProviderConfig"}, "workspace": {"type": "string", "minLength": 1}, "secret_ref": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}}
+    },
+    "OpenAIOptions": {"type": "object", "required": ["model_endpoint", "model"], "properties": {"model_endpoint": {"type": "string", "format": "uri"}, "model": {"type": "string", "minLength": 1, "maxLength": 256}, "profile": {"enum": ["openai", "opencode-go"]}}},
+    "Context": {
+      "type": "object", "required": ["session_id", "run_id", "model_call_id", "call_kind"],
+      "properties": {"session_id": {"$ref": "#/$defs/Identity"}, "run_id": {"$ref": "#/$defs/Identity"}, "model_call_id": {"$ref": "#/$defs/Identity"}, "call_kind": {"const": "primary"}}
+    },
+    "Metadata": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "required": ["format", "value"], "properties": {"format": {"type": "string"}, "value": {}}}
+      ]
+    },
+    "ToolCall": {"type": "object", "required": ["id", "name", "arguments"], "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1, "maxLength": 64}, "arguments": {"type": "object"}}},
+    "ToolDefinition": {"type": "object", "required": ["name", "description", "input_schema"], "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "description": {"type": "string"}, "input_schema": {"type": "object"}}},
+    "ModelMessage": {
+      "type": "object", "required": ["kind"],
+      "oneOf": [
+        {"required": ["text"], "properties": {"kind": {"const": "user"}, "text": {"type": "string"}}},
+        {"required": ["tool_calls"], "properties": {"kind": {"const": "assistant"}, "text": {"type": ["string", "null"]}, "tool_calls": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/ToolCall"}}, "metadata": {"$ref": "#/$defs/Metadata"}}},
+        {"required": ["call_id", "output"], "properties": {"kind": {"const": "tool_result"}, "call_id": {"type": "string", "minLength": 1}, "output": {}}}
+      ]
+    },
+    "ModelRequest": {
+      "type": "object", "required": ["options", "context", "messages", "tools"],
+      "properties": {
+        "options": {}, "credential": {"type": ["string", "null"]},
+        "context": {"$ref": "#/$defs/Context"},
+        "messages": {"type": "array", "items": {"$ref": "#/$defs/ModelMessage"}},
+        "tools": {"type": "array", "items": {"$ref": "#/$defs/ToolDefinition"}}
+      }
+    },
+    "ModelStep": {
+      "type": "object", "required": ["outcome"],
+      "oneOf": [
+        {"required": ["text"], "properties": {"outcome": {"const": "completed"}, "text": {"type": "string"}, "metadata": {"$ref": "#/$defs/Metadata"}}},
+        {"required": ["calls"], "properties": {"outcome": {"const": "await_host_tools"}, "text": {"type": ["string", "null"]}, "calls": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/ToolCall"}}, "metadata": {"$ref": "#/$defs/Metadata"}}}
+      ]
+    },
+    "AuthOperation": {"enum": ["login", "status", "logout"]},
+    "AuthCommand": {
+      "description": "Client–Server provider.auth request; configuration is pinned at acceptance.",
+      "type": "object", "required": ["attempt_id", "operation", "config_revision"],
+      "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}, "operation": {"$ref": "#/$defs/AuthOperation"}, "config_revision": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}}
+    },
+    "AuthCancel": {"type": "object", "required": ["attempt_id"], "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}}},
+    "ProviderAuthRequest": {
+      "type": "object", "required": ["attempt_id", "operation", "options"],
+      "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}, "operation": {"$ref": "#/$defs/AuthOperation"}, "options": {}, "credential": {"type": ["string", "null"]}}
+    },
+    "AuthStatus": {
+      "type": "object", "required": ["attempt_id", "authenticated"],
+      "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}, "authenticated": {"type": "boolean"}, "registration": {"type": ["object", "null"], "description": "Provider-defined nonsecret metadata; at most 16384 serialized UTF-8 bytes."}, "revocation_confirmed": {"type": ["boolean", "null"]}}
+    },
+    "InteractionRequest": {
+      "type": "object", "required": ["attempt_id", "url"],
+      "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}, "url": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 8192, "description": "Maximum 8192 UTF-8 bytes; no control characters. Never log login URLs."}}
+    },
+    "InteractionResponse": {
+      "type": "object", "required": ["attempt_id", "outcome"],
+      "properties": {"attempt_id": {"$ref": "#/$defs/Identity"}, "outcome": {"enum": ["opened", "declined", "unavailable"]}}
+    },
+    "CredentialReplace": {
+      "type": "object", "required": ["credential"],
+      "properties": {"credential": {"type": ["string", "null"], "maxLength": 65536, "description": "Maximum 65536 UTF-8 bytes. Null clears only the current operation's credential scope."}}
+    }
+  }
+}

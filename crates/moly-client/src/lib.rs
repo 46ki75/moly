@@ -5,7 +5,7 @@ mod client;
 mod tests;
 mod transport;
 
-pub use client::{Client, Error, Events, Tool};
+pub use client::{Client, Error, Events, Interaction, Tool};
 /// Shared identities, configuration, events, and protocol error types.
 ///
 /// Re-exported so consumers need not add a separate schema dependency.

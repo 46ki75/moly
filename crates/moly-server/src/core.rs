@@ -1,6 +1,7 @@
 //! Server Core: live-state authority without config discovery or transport I/O.
 use crate::executors::LocalExecutor;
 use crate::{model_provider::ModelProvider, secrets::SecretStore};
+use moly_protocol::auth::*;
 use moly_protocol::model::{
     CallKind, HostToolCall, InferenceContext, ModelMessage, ModelRequest, ModelStep,
 };
@@ -8,11 +9,15 @@ use moly_protocol::*;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+#[path = "auth_tests.rs"]
+mod auth_tests;
 
 const MAILBOX: usize = 128;
 const RETAINED_EVENTS: usize = 1024;
@@ -21,6 +26,13 @@ const MAX_MODEL_STEPS: usize = 16;
 pub enum Output {
     /// A canonical event already committed by the session actor.
     Event(SessionEvent),
+    /// Authentication-only interaction routed to its initiating Client.
+    Interaction {
+        /// Presentation request; never part of canonical conversation history.
+        request: InteractionRequest,
+        /// Correlated presentation outcome, not proof of authentication.
+        reply: oneshot::Sender<Result<InteractionResponse, ProtocolError>>,
+    },
     /// Reverse request for a Client-hosted side effect.
     Tool {
         /// Server-issued lease and arguments.
@@ -36,6 +48,31 @@ pub struct Connection {
     executor_id: ExecutorId,
     output: mpsc::Sender<Output>,
     closed: CancellationToken,
+    auth: Arc<Mutex<AuthAttempts>>,
+}
+#[derive(Default)]
+struct AuthAttempts {
+    seen: HashSet<AuthAttemptId>,
+    cancelled_before_start: HashSet<AuthAttemptId>,
+    active: HashMap<AuthAttemptId, CancellationToken>,
+}
+struct AuthGuard {
+    connection: Connection,
+    attempt: AuthAttemptId,
+}
+impl Drop for AuthGuard {
+    fn drop(&mut self) {
+        if let Some(cancel) = self
+            .connection
+            .auth
+            .lock()
+            .expect("auth registry not poisoned")
+            .active
+            .remove(&self.attempt)
+        {
+            cancel.cancel();
+        }
+    }
 }
 impl Connection {
     /// Create a bounded effect channel for an ordinary Client of any role.
@@ -47,6 +84,7 @@ impl Connection {
                 executor_id: ExecutorId::new(),
                 output,
                 closed: CancellationToken::new(),
+                auth: Arc::default(),
             },
             rx,
         )
@@ -62,6 +100,50 @@ impl Connection {
     /// Wait for a connection-scoped failure.
     pub async fn closed(&self) {
         self.closed.cancelled().await;
+    }
+    /// Present an authentication interaction on exactly this connection.
+    pub async fn interact(
+        &self,
+        request: InteractionRequest,
+    ) -> Result<InteractionResponse, ProtocolError> {
+        let (reply, response) = oneshot::channel();
+        self.emit(Output::Interaction { request, reply })?;
+        tokio::select! {
+            biased;
+            _ = self.closed() => Err(error("interaction_unavailable", "Authentication Client disconnected")),
+            response = response => response.unwrap_or_else(|_| Err(error("interaction_unavailable", "Interaction unavailable"))),
+        }
+    }
+    fn begin_auth(
+        &self,
+        attempt: AuthAttemptId,
+    ) -> Result<(AuthGuard, CancellationToken), ProtocolError> {
+        let mut registry = self.auth.lock().expect("auth registry not poisoned");
+        if registry.cancelled_before_start.contains(&attempt) {
+            return Err(error(
+                "auth_cancelled",
+                "Authentication was cancelled before acceptance",
+            ));
+        }
+        if registry.seen.contains(&attempt) {
+            return Err(error(
+                "invalid_params",
+                "Authentication attempt ID was already used",
+            ));
+        }
+        if registry.seen.len() >= 1024 || registry.active.len() >= 8 {
+            return Err(error("limit", "Authentication operation limit reached"));
+        }
+        let cancel = CancellationToken::new();
+        registry.seen.insert(attempt);
+        registry.active.insert(attempt, cancel.clone());
+        Ok((
+            AuthGuard {
+                connection: self.clone(),
+                attempt,
+            },
+            cancel,
+        ))
     }
     fn emit(&self, output: Output) -> Result<(), ProtocolError> {
         if self.closed.is_cancelled() || self.output.try_send(output).is_err() {
@@ -179,10 +261,48 @@ impl Server {
                     value: String,
                 }
                 let put: Put = decode(params)?;
-                if put.key.is_empty() || put.key.len() > 128 || put.value.len() > 16 * 1024 {
+                if put.key.is_empty() || put.key.len() > 128 || put.value.len() > 64 * 1024 {
                     return Err(error("invalid_params", "invalid secret size or key"));
                 }
-                self.0.secrets.insert(put.key, put.value);
+                self.0.secrets.insert(put.key, put.value).await;
+                return Ok(Value::Null);
+            }
+            "provider.auth" => {
+                if !params.is_object() {
+                    return Err(error(
+                        "invalid_params",
+                        "Expected authentication request object",
+                    ));
+                }
+                let command: AuthCommand = decode(params)?;
+                return value(self.authenticate(connection, command).await?);
+            }
+            "auth.cancel" => {
+                if !params.is_object() {
+                    return Err(error(
+                        "invalid_params",
+                        "Expected authentication cancellation object",
+                    ));
+                }
+                let cancel: AuthCancel = decode(params)?;
+                let mut registry = connection.auth.lock().expect("auth registry not poisoned");
+                let Some(operation) = registry.active.get(&cancel.attempt_id) else {
+                    // Duplex command tasks can reach Core out of order. Fence a
+                    // cancelled identity even if its original command is delayed;
+                    // a UI cancellation must never cause a later browser login.
+                    if !registry.seen.contains(&cancel.attempt_id) {
+                        if registry.seen.len() >= 1024 {
+                            return Err(error("limit", "Authentication identity limit reached"));
+                        }
+                        registry.seen.insert(cancel.attempt_id);
+                        registry.cancelled_before_start.insert(cancel.attempt_id);
+                    }
+                    return Err(error(
+                        "not_active",
+                        "Authentication operation is not active on this connection",
+                    ));
+                };
+                operation.cancel();
                 return Ok(Value::Null);
             }
             "session.create" => {
@@ -244,6 +364,58 @@ impl Server {
         .await
         .map_err(|_| error("closed", "session stopped"))?;
         rx.await.map_err(|_| error("closed", "session stopped"))?
+    }
+    async fn authenticate(
+        &self,
+        connection: &Connection,
+        command: AuthCommand,
+    ) -> Result<AuthStatus, ProtocolError> {
+        let snapshot = self
+            .0
+            .config
+            .lock()
+            .expect("config lock not poisoned")
+            .clone();
+        if snapshot.revision != command.config_revision {
+            return Err(error("revision_conflict", "Configuration revision changed"));
+        }
+        let config = snapshot
+            .config
+            .ok_or_else(|| error("not_configured", "Apply resolved configuration first"))?;
+        let key = config.secret_ref.as_deref().ok_or_else(|| {
+            error(
+                "invalid_config",
+                "Authentication requires a credential reference",
+            )
+        })?;
+        let (_guard, cancel) = connection.begin_auth(command.attempt_id)?;
+        let seconds = if command.operation == AuthOperation::Login {
+            300
+        } else {
+            30
+        };
+        let work = async {
+            let mut credential = self.0.secrets.acquire(key).await;
+            let request = ProviderAuthRequest {
+                attempt_id: command.attempt_id,
+                operation: command.operation,
+                options: config.provider.options.clone(),
+                credential: credential.clone(),
+            };
+            self.0
+                .provider
+                .authenticate(&config.provider, request, &mut credential, connection)
+                .await
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(error("auth_cancelled", "Authentication operation cancelled")),
+            _ = connection.closed() => Err(error("auth_cancelled", "Authentication Client disconnected")),
+            _ = self.0.shutdown.cancelled() => Err(error("auth_cancelled", "Server stopped")),
+            result = tokio::time::timeout(std::time::Duration::from_secs(seconds), work) => {
+                result.unwrap_or_else(|_| Err(error("auth_timeout", "Authentication operation expired")))
+            }
+        }
     }
     /// Remove connection-lifetime registrations and subscriptions, not live runs.
     pub async fn disconnect(&self, connection: &Connection) {
@@ -567,16 +739,23 @@ impl Session {
                 biased;
                 _ = cancel.cancelled() => {},
                 _ = async {
-                    let credential = match config.secret_ref.as_deref() {
-                        Some(key) => secrets.get(key).map(Some).ok_or_else(|| error("secret_not_found", "Model credential is unavailable")),
-                        None => Ok(None),
-                    };
-                    let result = match credential {
-                        Err(error) => Err(error),
-                        Ok(credential) => provider.step(&config.provider, ModelRequest {
+                    let operation = async {
+                        let mut slot = match config.secret_ref.as_deref() {
+                            Some(key) => Some(secrets.acquire(key).await),
+                            None => None,
+                        };
+                        let credential = match slot.as_ref() {
+                            Some(slot) => Some(slot.as_ref().ok_or_else(|| error("secret_not_found", "Model credential is unavailable"))?.clone()),
+                            None => None,
+                        };
+                        provider.step(&config.provider, ModelRequest {
                             options: config.provider.options.clone(), credential, context, messages, tools,
-                        }).await,
+                        }, slot.as_deref_mut()).await
                     };
+                    // Include credential-lease contention in the deadline; a login
+                    // on another connection must not leave this model call unbounded.
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(65), operation).await
+                        .unwrap_or_else(|_| Err(error("provider_timeout", "Model Provider operation timed out")));
                     let _ = tx.send(Command::ModelDone(run, result)).await;
                 } => {},
             }

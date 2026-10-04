@@ -1,15 +1,16 @@
 //! Semantic Client implementation behind the SDK's public facade.
 use crate::transport::{self, Incoming, Peer};
-use moly_protocol::*;
+use moly_protocol::{auth::*, *};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     future::Future,
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Weak},
 };
 use tokio::{sync::mpsc, task::JoinSet};
+use tokio_util::sync::CancellationToken;
 
 /// Recoverable connection, encoding, or Server-operation failure.
 ///
@@ -61,9 +62,64 @@ struct ToolRegistry {
     closed: bool,
 }
 type Tools = Arc<RwLock<ToolRegistry>>;
+type InteractionFuture =
+    Pin<Box<dyn Future<Output = Result<InteractionOutcome, ProtocolError>> + Send>>;
+type InteractionHandler = dyn Fn(InteractionRequest) -> InteractionFuture + Send + Sync;
+struct Attempt {
+    handler: Option<Weak<InteractionHandler>>,
+    cancelled: CancellationToken,
+}
+#[derive(Default)]
+struct AuthRegistry {
+    attempts: HashMap<AuthAttemptId, Attempt>,
+    closed: bool,
+}
+type AuthHandlers = Arc<RwLock<AuthRegistry>>;
+struct Authenticating {
+    registry: AuthHandlers,
+    attempt_id: AuthAttemptId,
+    peer: Peer,
+    pending: bool,
+}
+impl Drop for Authenticating {
+    fn drop(&mut self) {
+        if let Some(attempt) = self
+            .registry
+            .write()
+            .expect("auth registry not poisoned")
+            .attempts
+            .remove(&self.attempt_id)
+        {
+            attempt.cancelled.cancel();
+        }
+        if self.pending {
+            // Dropping an auth future withdraws presentation authority immediately.
+            // Cancel the remote operation best-effort without capturing a Client.
+            let peer = self.peer.clone();
+            let attempt_id = self.attempt_id;
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        peer.request("auth.cancel", json!({"attempt_id": attempt_id})),
+                    ).await;
+                    if !matches!(result, Ok(Ok(Value::Null))) &&
+                        !matches!(result, Ok(Err(transport::Error::Remote(ref error))) if error.code == "not_active") {
+                        // If cancellation cannot be delivered/acknowledged, closing
+                        // the initiating connection is the Server's cleanup fence.
+                        peer.close();
+                    }
+                });
+            } else {
+                peer.close();
+            }
+        }
+    }
+}
 struct Inner {
     peer: Peer,
     tools: Tools,
+    auth: AuthHandlers,
     initialized: Initialized,
     registration: tokio::sync::Mutex<()>,
 }
@@ -138,6 +194,28 @@ impl Tool {
         }
     }
 }
+/// A headless application's asynchronous presentation callback for one auth attempt.
+///
+/// The SDK binds the response to the request identity. `Opened` means presented,
+/// not authenticated. Do not log URLs or launch shell commands. A handler may issue
+/// nested requests on the same Client. Unlike persistent tool registrations, auth
+/// registrations are weak and scoped to [`Client::authenticate`]; capturing a Client
+/// does not leave a registry ownership cycle after completion or cancellation.
+pub struct Interaction {
+    handler: Arc<InteractionHandler>,
+}
+impl Interaction {
+    /// Define presentation policy without installing it globally on the connection.
+    pub fn new<F, Fut>(present: F) -> Self
+    where
+        F: Fn(InteractionRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<InteractionOutcome, ProtocolError>> + Send + 'static,
+    {
+        Self {
+            handler: Arc::new(move |request| Box::pin(present(request))),
+        }
+    }
+}
 impl Client {
     /// Connect to an existing local Server and verify its role and protocol version.
     ///
@@ -164,6 +242,8 @@ impl Client {
         let mut connecting = Connecting(Some(peer.clone()));
         let tools: Tools = Arc::default();
         let handlers = tools.clone();
+        let auth: AuthHandlers = Arc::default();
+        let interactions = auth.clone();
         let dispatcher = peer.clone();
         let (events_tx, events_rx) = mpsc::channel(2048);
         tokio::spawn(async move {
@@ -184,8 +264,13 @@ impl Client {
                             if requests.len() >= 128 { break; }
                             let peer = dispatcher.clone();
                             let handlers = handlers.clone();
+                            let interactions = interactions.clone();
                             requests.spawn(async move {
-                                let result = execute(&handlers, &method, params).await;
+                                let result = if method == "interaction.request" {
+                                    interact(&interactions, params).await
+                                } else {
+                                    execute(&handlers, &method, params).await
+                                };
                                 let _ = peer.respond(id, result).await;
                             });
                         }
@@ -193,6 +278,7 @@ impl Client {
                 }
             }
             dispatcher.close();
+            close_auth(&interactions);
             // Dropping JoinSet aborts callbacks on connection loss, not external side effects.
         });
         let handshake = peer
@@ -216,6 +302,7 @@ impl Client {
             Self(Arc::new(Inner {
                 peer,
                 tools,
+                auth,
                 initialized,
                 registration: tokio::sync::Mutex::new(()),
             })),
@@ -232,6 +319,7 @@ impl Client {
     /// Call explicitly if a callback captures a clone of this Client (an Arc cycle).
     pub fn close(&self) {
         self.0.peer.close();
+        close_auth(&self.0.auth);
         let mut registry = self.0.tools.write().expect("tool registry not poisoned");
         registry.closed = true;
         registry.handlers.clear();
@@ -287,6 +375,86 @@ impl Client {
     pub async fn put_secret(&self, key: &str, secret: &str) -> Result<(), Error> {
         self.request("secret.put", json!({"key":key, "value":secret}))
             .await
+    }
+    /// Perform an explicit Provider auth operation pinned to a config revision.
+    ///
+    /// Use a fresh attempt ID. An optional callback is installed before sending the
+    /// command, and only a matching live `Login` can invoke it. Headless/default
+    /// Clients return `interaction_unavailable`. No implicit human-login deadline,
+    /// browser launch, process management, configuration, or persistence is provided.
+    /// The callback is removed on every exit; dropping this future also aborts its
+    /// callback futures and sends best-effort `auth.cancel`. For confirmed cancellation,
+    /// call [`Client::cancel_auth`] concurrently and await this operation's terminal
+    /// response. Lost responses remain uncertain; inspect status rather than retrying.
+    pub async fn authenticate(
+        &self,
+        command: AuthCommand,
+        interaction: Option<Interaction>,
+    ) -> Result<AuthStatus, Error> {
+        let attempt_id = command.attempt_id;
+        {
+            let mut registry = self.0.auth.write().expect("auth registry not poisoned");
+            if registry.closed {
+                return Err(Error::Closed);
+            }
+            if registry.attempts.contains_key(&attempt_id) {
+                return Err(
+                    ProtocolError::new("invalid_params", "auth attempt already active").into(),
+                );
+            }
+            registry.attempts.insert(
+                attempt_id,
+                Attempt {
+                    handler: if command.operation == AuthOperation::Login {
+                        interaction
+                            .as_ref()
+                            .map(|interaction| Arc::downgrade(&interaction.handler))
+                    } else {
+                        None
+                    },
+                    cancelled: CancellationToken::new(),
+                },
+            );
+        }
+        let mut guard = Authenticating {
+            registry: self.0.auth.clone(),
+            attempt_id,
+            peer: self.0.peer.clone(),
+            pending: true,
+        };
+        let result = self.request::<AuthStatus>("provider.auth", command).await;
+        guard.pending = false;
+        // The operation owns the strong callback; the registry never does. Keep it
+        // alive across the RPC even when the compiler can see no further use.
+        drop(interaction);
+        match result {
+            Ok(status) if status.attempt_id != attempt_id => {
+                self.close();
+                Err(Error::Frame("mismatched auth attempt"))
+            }
+            result => result,
+        }
+    }
+    /// Cancel an auth operation on this same connection, not an unrelated run.
+    ///
+    /// Await the original auth response as well: this acknowledgment alone does not
+    /// establish whether completion won the race or recover a lost auth result.
+    /// Once the cancel RPC returns, matching presentation callbacks are withdrawn,
+    /// while the original auth request remains pending until its terminal response.
+    pub async fn cancel_auth(&self, attempt_id: AuthAttemptId) -> Result<(), Error> {
+        let result = self.request("auth.cancel", AuthCancel { attempt_id }).await;
+        if let Some(attempt) = self
+            .0
+            .auth
+            .write()
+            .expect("auth registry not poisoned")
+            .attempts
+            .get_mut(&attempt_id)
+        {
+            attempt.handler = None;
+            attempt.cancelled.cancel();
+        }
+        result
     }
     /// Allocate a session independent of this connection's lifetime.
     pub async fn create_session(&self) -> Result<SessionId, Error> {
@@ -407,6 +575,43 @@ impl Client {
         registering.0.take();
         result
     }
+}
+fn close_auth(handlers: &AuthHandlers) {
+    let mut registry = handlers.write().expect("auth registry not poisoned");
+    registry.closed = true;
+    for (_, attempt) in registry.attempts.drain() {
+        attempt.cancelled.cancel();
+    }
+}
+async fn interact(handlers: &AuthHandlers, params: Value) -> Result<Value, ProtocolError> {
+    let request: InteractionRequest = serde_json::from_value(params)
+        .map_err(|_| ProtocolError::new("invalid_params", "invalid interaction request"))?;
+    let attempt_id = request.attempt_id;
+    let unavailable =
+        || ProtocolError::new("interaction_unavailable", "no live Client interaction");
+    let (handler, cancelled) = {
+        let registry = handlers.read().expect("auth registry not poisoned");
+        let attempt = registry.attempts.get(&attempt_id).ok_or_else(unavailable)?;
+        let handler = attempt
+            .handler
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(unavailable)?;
+        (handler, attempt.cancelled.clone())
+    };
+    let outcome = tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => return Err(unavailable()),
+        result = handler(request) => result?,
+    };
+    if cancelled.is_cancelled() {
+        return Err(unavailable());
+    }
+    serde_json::to_value(InteractionResponse {
+        attempt_id,
+        outcome,
+    })
+    .map_err(|_| ProtocolError::new("internal", "cannot serialize interaction outcome"))
 }
 async fn execute(handlers: &Tools, method: &str, params: Value) -> Result<Value, ProtocolError> {
     if method != "tool.execute" {

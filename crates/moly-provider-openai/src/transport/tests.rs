@@ -1,4 +1,5 @@
 use super::*;
+use moly_protocol::model::PROVIDER_VERSION;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -86,7 +87,11 @@ async fn split_coalesced_requests_have_ordered_correlated_replies() -> TestResul
     let server = tokio::spawn(serve(BufReader::new(read), write, service));
     let (read, mut write) = tokio::io::split(client);
     let mut read = BufReader::new(read);
-    let mut bytes = encode_frame(&request(7, "initialize", json!({"protocol_version": 1})))?;
+    let mut bytes = encode_frame(&request(
+        7,
+        "initialize",
+        json!({"protocol_version": PROVIDER_VERSION}),
+    ))?;
     bytes.extend(encode_frame(&request(
         8,
         "provider.validate",
@@ -160,7 +165,11 @@ async fn eof_and_malformed_input_abort_an_in_flight_http_request() -> TestResult
         let mut read = BufReader::new(read);
         write_frame(
             &mut write,
-            &request(1, "initialize", json!({"protocol_version": 1})),
+            &request(
+                1,
+                "initialize",
+                json!({"protocol_version": PROVIDER_VERSION}),
+            ),
         )
         .await?;
         read_reply(&mut read).await?;
@@ -202,7 +211,11 @@ async fn requests_are_not_executed_concurrently() -> TestResult {
     let mut read = BufReader::new(read);
     write_frame(
         &mut write,
-        &request(1, "initialize", json!({"protocol_version": 1})),
+        &request(
+            1,
+            "initialize",
+            json!({"protocol_version": PROVIDER_VERSION}),
+        ),
     )
     .await?;
     read_reply(&mut read).await?;
@@ -243,7 +256,11 @@ async fn full_request_queue_closes_instead_of_hiding_eof() -> TestResult {
     let mut read = BufReader::new(read);
     write_frame(
         &mut write,
-        &request(1, "initialize", json!({"protocol_version": 1})),
+        &request(
+            1,
+            "initialize",
+            json!({"protocol_version": PROVIDER_VERSION}),
+        ),
     )
     .await?;
     read_reply(&mut read).await?;

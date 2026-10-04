@@ -43,6 +43,25 @@ where
                         result = peer.event("session.event", params) => { if result.is_err() { break; } },
                     }
                 }
+                Some(Output::Interaction { request, mut reply }) => {
+                    let peer = peer.clone();
+                    tasks.spawn(async move {
+                        let result = async {
+                            let params = serde_json::to_value(request).map_err(|_| ProtocolError::new("internal", "Invalid interaction request"))?;
+                            let value = peer.request("interaction.request", params).await.map_err(|_| ProtocolError::new("interaction_unavailable", "Client interaction unavailable"))?;
+                            if !value.is_object() { return Err(ProtocolError::new("provider_protocol", "Invalid interaction result")); }
+                            serde_json::from_value(value).map_err(|_| ProtocolError::new("provider_protocol", "Invalid interaction result"))
+                        };
+                        // Cancellation closes the effect receiver. Drop the reverse
+                        // RPC immediately so late UI replies have no live authority.
+                        let result = tokio::select! {
+                            biased;
+                            _ = reply.closed() => return,
+                            result = result => result,
+                        };
+                        let _ = reply.send(result);
+                    });
+                }
                 Some(Output::Tool { request, reply }) => {
                     let peer = peer.clone();
                     tasks.spawn(async move {

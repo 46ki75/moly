@@ -72,10 +72,10 @@ try:
     process.stdin.write(b"hello\n")
     process.stdin.flush()
     spawned = process.stderr.readline().decode()
-    assert spawned.startswith("Spawned unmanaged Server pid="), spawned
+    assert spawned.startswith("Spawned unmanaged Agent Server pid="), spawned
     server_pid = int(spawned.split("pid=", 1)[1])
     diagnostic = process.stderr.readline().decode()
-    assert diagnostic.startswith("Server "), diagnostic
+    assert diagnostic.startswith("Agent Server "), diagnostic
     endpoint = diagnostic.split(" at ", 1)[1].split("; session ", 1)[0]
     assert process.stdout.readline() == b"mock-completed\n"
     assert process.stdout.read(6) == b"moly> "
@@ -98,12 +98,14 @@ try:
         peer.connect(endpoint)
         peer.sendall(json.dumps({
             "version": 1, "type": "request", "id": 1, "method": "initialize",
-            "params": {"protocol_version": 2},
+            "params": {"protocol_version": 3},
         }).encode() + b"\n")
         reply = json.loads(peer.makefile("rb").readline())
+        assert reply["version"] == 1
         assert reply["result"]["role"] == "server"
-        assert reply["result"]["server_id"] == diagnostic.split()[1]
-    print("PASS: lazy spawn, inference, active/idle Ctrl-C, Server survived CLI exit")
+        assert reply["result"]["protocol_version"] == 3
+        assert reply["result"]["server_id"] == diagnostic.removeprefix("Agent Server ").split(" at ", 1)[0]
+    print("PASS: lazy spawn, inference, active/idle Ctrl-C, Agent Server survived CLI exit")
 finally:
     deadline.cancel()
     release.set()

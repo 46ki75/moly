@@ -4,6 +4,148 @@ Verified on macOS arm64 with pinned Rust 1.98.0 and system Python 3.9.6. The rep
 started empty. Earlier checkpoints reached 59, 82, 86, and 93 tests. The Provider
 protocol work began by rerunning the **93-test / 3-doctest baseline successfully**.
 
+## Conversation history v1 / Agent Server naming checkpoint
+
+- The unchanged baseline passed **263 tests and 6 SDK doctests**. A new contract
+  asset check failed before the history schema/fixtures existed. The CLI naming
+  regression failed before help identified the Agent Server as agentic-loop owner.
+- `moly-protocol::history` adds independently versioned history DTOs and pure,
+  bounded JSONL decoding/encoding, graph validation, and selected-ancestry queries.
+  The separate `urn:moly:conversation-history:1` schema and golden snapshots preserve
+  logical session IDs, branch selection, tool correlations, and opaque Provider
+  replay/state. No runtime save/resume, Session Store, or new MPP operation is added.
+- **35 new history tests** cover golden roundtrips, arbitrary physical order, exact
+  branch exports, fork provenance, state clearing, malformed/duplicate/unknown
+  fields, canonical IDs, ancestry/revision failures, branch-safe tool results,
+  100,000-entry boundaries, UTF-8 byte limits, depth limits, and number precision.
+  A draft negative test incorrectly rejected the permitted `state: null` reset;
+  the parent isolated that case and corrected the test to match the contract.
+- Retained regressions reproduced and fixed encoder output too deeply nested to
+  decode, finite-float roundtrip drift, and overflowing integer tokens silently
+  becoming floats. `serde_json` now enables `float_roundtrip`; no dependency version
+  or project dependency edge changed. A schema check also caught and corrected the
+  missing nonblank constraint on tool-result call IDs.
+- The full `mise run check` passes **298 tests, zero skipped, and 6 SDK doctests**,
+  including binary builds, rustfmt, and warnings-denied workspace Clippy. Formatting
+  failed before applying rustfmt and is stable afterward. Warnings-denied rustdoc
+  initially caught an unqualified history link; the corrected link passes.
+- A scoped independent review confirmed the float issue and reported no other
+  confirmed source findings. After the fix, the parent reran six reviewer probes,
+  including the exact failing float, shape/depth/record bounds, u64 precision, and
+  a small-forest tool-reference oracle. This was not a full-system security audit.
+  Documentation/schema preparation workers reached their time limits; the parent
+  completed integration, reviewed their artifacts, and ran the checks above.
+- Documentation and CLI help/diagnostics now use **Agent Server**. `moly-server`,
+  `ServerId`, `SERVER_VERSION`, roles `server` / `model_provider`, envelope v1,
+  Agent Server v3, MPP v2, and historical schemas/traces are unchanged. All 31 CLI
+  tests pass. The Unix signal smoke caught an old single-word diagnostic parser;
+  after updating it, lazy spawn, inference, active/idle Ctrl-C, and Agent Server
+  survival after CLI exit pass again with local mock HTTP.
+- Linux ARM64 and Windows GNU all-targets cross-Clippy pass for protocol, both SDKs,
+  CLI, and Agent Server. These are compilation checks, not native platform tests.
+  Local Markdown paths/heading anchors were checked; external URLs were not fetched.
+
+Schema structure/references and typed fixtures are checked, not a complete
+third-party JSON Schema validator. These checks do not validate disk durability,
+exclusive storage ownership, runtime restoration, migration, live upstream-session
+resumption, OAuth/model access, or native Windows/Linux behavior. History v1 is a
+limited data contract, not full persistence-requirements compliance.
+
+## MPP SDK extraction / direct CLI checkpoint
+
+- The unchanged `mise run --silent check` baseline passed **230 tests and 4 SDK
+  doctests**. The new dependency-graph regression failed before extraction and
+  passed afterward. CLI subprocess coverage reproduced `--direct` rejection
+  before implementation and now passes.
+- `moly-provider-client` is shared by Server and direct CLI hosts, with private
+  framing/supervision and no executable imports, upstream HTTP, credential store,
+  UI, or agent loop. Server leases, routing, and cancellation fences remain outside
+  it. Envelope v1, MPP/Provider v2, Server v3, role `model_provider`, schema IDs and
+  filenames, and historical fixtures are unchanged; only schema descriptions/title
+  adopt the MPP name.
+- The full `mise run check` passes **263 tests, zero skipped, and 6 SDK doctests**,
+  including binary builds, rustfmt, and warnings-denied workspace Clippy. The SDK
+  adds the nine shared framing checks and 16 independent Python-Provider process
+  tests. They cover explicit environment/arguments, model/tool metadata, malformed
+  replies, credential scope/rotation, inline callback cancellation, and actual
+  child cleanup without a Server. Existing Server-path regressions still pass.
+- Eight direct CLI subprocess tests cover lazy startup with an isolated CLI and
+  no Server executable, login/status/logout, nonsecret registration permissions and
+  conflicts, memory-only tokens, multi-turn metadata/IDs, `/new`, failed/cancelled
+  context discard, queued input/EOF, child cleanup, no tools, and no host fallback.
+  Most direct process cases are Unix-only; synthetic peers/local HTTP do not
+  validate a live Codex service.
+- A separate isolated CLI probe using the actual bundled Codex executable passed
+  lazy startup, offline validation/signed-out status, owner-only nonsecret state,
+  and clean exit without a Server executable. No login or inference was attempted.
+- Linux ARM64 and Windows GNU all-targets cross-Clippy pass for CLI, both SDKs, and
+  Server. A Windows-only unused test import was observed and is now conditionally
+  imported. These are compilation/lint checks, not native runtime or bundled-Provider
+  cross-compilation. Warnings-denied rustdoc for both SDKs/protocol also passes.
+- A scoped read-only CLI reviewer found no actionable defects, reran all 31 CLI
+  tests, and passed 110 extra loopback-only process-group SIGINT trials: 30 auth,
+  30 independent-Provider model, and 50 bundled-Provider model cancellations.
+  These macOS trials simulated terminal signal delivery; they were not actual
+  terminal, native Windows/Linux, or live-service tests.
+- A separate read-only SDK extraction review reached its 600-second time limit
+  without a report. This is not a completed independent review or a security audit;
+  the checks above are the reproducible verification evidence.
+- The Unix unmanaged-Server/process-group signal smoke passes. The normal-mode
+  first-prompt probe measured **2.08 / 2.48 / 4.94 ms** minimum/median/maximum across
+  25 warmed samples on this host, not a portable performance guarantee.
+
+Direct mode has CLI-memory credentials, no tools or Server sessions/replay, and no
+Session Store access. Only nonsecret registration persists under the same Unix
+policy. Live OAuth, model entitlement, and external inference remain unverified.
+
+Earlier checkpoint results below describe their original scope; in particular,
+Server-only credential storage and older dependency graphs are historical, not
+claims about direct mode. Mock Provider/HTTP/OAuth tests do not validate a live
+service. No new live-service access is authorized or reported for this extraction.
+
+## Interactive authentication / Codex pilot (pre-MPP extraction)
+
+- The unchanged `mise run --silent check` baseline passed **148 tests and 3 SDK
+  doctests** before implementation.
+- Server v3 / Provider v2 add connection-scoped auth operations, reverse URL
+  interactions, and scoped opaque credential replacement. The new executable
+  owns OAuth and Responses HTTP; no HTTP or OAuth dependency was added to Server
+  or SDK. Historical Provider v1 schema and Server v1 trace remain intact.
+- A deterministic regression reproduced cancellation arriving before the login
+  command was accepted. Connection-scoped cancellation fences now reject that
+  delayed command; the same regression passes after the fix.
+- Independent review reproduced conflicting CLI registration overwrites,
+  chunk-dependent SSE completion, rejected history after tool removal, and incorrect
+  classification of headless interaction errors. Retained regressions failed before
+  the fixes and passed afterward, including the CLI process ownership check.
+  A fresh, scoped follow-up reviewer ran 13 focused tests and found no remaining
+  actionable issues in those four fixes; this was not a whole-system security audit.
+- A separate regression reproduced Serde accepting object-valued auth enums despite
+  the string-only schema. Both auth operations and presentation outcomes now enforce
+  strings; the same regression passes.
+- Local signed-OIDC fixtures exercise PKCE/state/nonce, identity/scope failures,
+  returning-account binding, refresh rotation and claims, revocation, and EOF
+  cancellation. Responses fixtures exercise terminal SSE completion, failure/size
+  limits, namespaced tools, and opaque replay across later turns.
+- A standalone-process probe passed Provider v2 handshake, offline config validation,
+  signed-out status, sanitized errors, and clean EOF exit without credentials or
+  model access.
+- The full gate passes **230 tests, zero skipped, and 4 SDK doctests**, including
+  all executable builds, rustfmt, and warnings-denied workspace Clippy. Formatting
+  failed before rustfmt, passed afterward, and was stable on the second pass.
+- Warnings-denied SDK/protocol rustdoc, Linux ARM64 / Windows GNU all-targets
+  cross-Clippy for CLI/SDK/Server, and Unix unmanaged-Server/signal smoke pass.
+  Cross-Clippy is not native Linux/Windows execution or Provider cross-compilation.
+  The CLI first-prompt probe measured **2.15 / 2.56 / 3.98 ms** minimum/median/maximum
+  across 25 warmed samples on this host; this is not a portable performance guarantee.
+- Public OpenAI [OIDC discovery](https://auth.openai.com/.well-known/openid-configuration)
+  was read to confirm the documented issuer, authorization/token/revocation/JWKS
+  endpoints, S256 support, and RS256 metadata. Reading metadata is not a live
+  OAuth login, token exchange, or model-entitlement test.
+- Credentials are Server-memory-only. CLI registration files currently require Unix
+  owner-only permissions. Remote callbacks, device-code login, durable tokens,
+  multi-account UX, and cross-Server refresh coordination are outside the pilot.
+
 ## Recoverable tool outcomes checkpoint
 
 - The unchanged baseline passed **141 tests and 3 SDK doctests**.
@@ -140,11 +282,14 @@ they are not proof of improvement, a release benchmark, or a portable guarantee.
 
 ## Remaining scope and verification limits
 
-This checkpoint implements the Model Provider extension boundary, **not all of
-`REQUIREMENTS.md`**. Session Store protocol/client crate, tree persistence, exclusive
-storage ownership, restoration, and Daemon behavior remain unimplemented. Streaming,
-usage accounting, interactive authentication, reverse Provider host services, and
-persistent Provider workers also remain outside this slice.
+These checkpoints cover the Provider extension boundary, shared MPP host SDK, and
+limited direct CLI mode, and the separate history data contract, **not all of
+`REQUIREMENTS.md`**. Session Store protocol/client
+crate, tree persistence, exclusive storage ownership, restoration, and Daemon
+behavior remain unimplemented.
+Client-visible streaming, usage accounting, durable credentials, remote OAuth
+callback routing, device-code login, and persistent Provider workers remain outside
+this slice. Upstream Responses SSE is consumed internally by the new Provider.
 
 No live provider credentials or external inference services were exercised.
 Windows/Linux native behavior, bundled-Provider cross-compilation, Windows ACLs and

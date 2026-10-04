@@ -1,5 +1,9 @@
-//! Experimental Component schemas. No transport, process, or configuration discovery.
-/// Model Provider protocol and provider-neutral model context.
+//! Experimental Component and history schemas. No transport or configuration discovery.
+/// Generic interactive authentication and scoped credential host services.
+pub mod auth;
+/// Independently versioned conversation-history records and pure validation.
+pub mod history;
+/// Moly Provider Protocol (MPP) and provider-neutral model context.
 pub mod model;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -7,8 +11,8 @@ use uuid::Uuid;
 
 /// Common envelope version, independent of Component semantic versions.
 pub const VERSION: u16 = 1;
-/// Client–Server semantic version. V2 requires explicit Provider launch configuration.
-pub const SERVER_VERSION: u16 = 2;
+/// Client–Agent Server semantic version. V3 adds authentication and interactions.
+pub const SERVER_VERSION: u16 = 3;
 /// Maximum JSON payload bytes, excluding its terminating LF.
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
@@ -38,16 +42,26 @@ macro_rules! identity {
 }
 identity!(
     ServerId,
-    "Live Server incarnation identity; not a PID or endpoint."
+    "Live Agent Server incarnation identity; not a PID or endpoint."
 );
 identity!(ConnectionId, "One attached peer connection; not a session.");
 identity!(
     SessionId,
     "Conversation identity independent of connections."
 );
-identity!(RunId, "Server-owned run identity.");
-identity!(ModelCallId, "One Server-authorized inference step.");
-identity!(ToolRunId, "Server-owned tool invocation; not a child PID.");
+identity!(
+    RunId,
+    "Agent Server-owned run identity, or a direct host's local turn correlation."
+);
+identity!(
+    AuthAttemptId,
+    "Host-scoped authentication attempt; Agent Server-routed attempts belong to a Client connection."
+);
+identity!(ModelCallId, "One host-authorized inference step.");
+identity!(
+    ToolRunId,
+    "Agent Server-owned tool invocation; not a child PID."
+);
 identity!(ExecutorId, "Logical side-effect executor; not a process.");
 
 /// A transport-independent protocol envelope. Unknown fields are tolerated.

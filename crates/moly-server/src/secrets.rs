@@ -1,44 +1,57 @@
-//! Generic host-owned secrets; only the selected reference crosses the Provider channel.
+//! Generic host-owned, memory-only credential slots. No credential interpretation.
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
-/// Shared memory-only values, never discovered from files, environment, or Debug.
+type Slot = Arc<AsyncMutex<Option<String>>>;
+
+/// Shared opaque values, never discovered from files, environment, or Debug.
 #[derive(Clone, Default)]
 pub struct SecretStore {
-    values: Arc<RwLock<HashMap<String, String>>>,
+    values: Arc<Mutex<HashMap<String, Slot>>>,
 }
 impl SecretStore {
-    /// Insert or replace an opaque Client-supplied value.
-    pub fn insert(&self, key: String, value: String) {
-        // Poisoning does not change the map's invariants; never include secrets
-        // in panic diagnostics when recovering another task's poisoned lock.
-        self.values
-            .write()
+    /// Lease exactly one reference for an entire Provider operation.
+    ///
+    /// Serializing even inference is deliberate in this pilot: a newly spawned
+    /// process must never receive a stale rotating token. Dropping the operation
+    /// releases the lease, but preserves credential replacements already committed.
+    pub async fn acquire(&self, key: &str) -> OwnedMutexGuard<Option<String>> {
+        let slot = self
+            .values
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key, value);
+            .entry(key.to_owned())
+            .or_default()
+            .clone();
+        slot.lock_owned().await
     }
-    /// Copy exactly the referenced value; this is not a zeroizing credential vault.
-    pub fn get(&self, key: &str) -> Option<String> {
-        self.values
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(key)
-            .cloned()
+    /// Replace a Client-supplied value without racing a Provider credential update.
+    pub async fn insert(&self, key: String, value: String) {
+        *self.acquire(&key).await = Some(value);
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn secret_clones_share_insert_and_replace() {
+    #[tokio::test]
+    async fn clones_serialize_updates_and_retain_commits_after_cancellation() {
         let secrets = SecretStore::default();
         let shared = secrets.clone();
-        assert_eq!(shared.get("key"), None);
-        secrets.insert("key".into(), "first".into());
-        assert_eq!(shared.get("key").as_deref(), Some("first"));
-        shared.insert("key".into(), "second".into());
-        assert_eq!(secrets.get("key").as_deref(), Some("second"));
+        assert!(shared.acquire("key").await.is_none());
+        secrets.insert("key".into(), "first".into()).await;
+        let mut lease = secrets.acquire("key").await;
+        *lease = Some("rotated".into());
+        let replace = shared.insert("key".into(), "second".into());
+        tokio::pin!(replace);
+        // Check Pending directly: no scheduling/timing assumption is needed.
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(replace.as_mut(), &mut context).is_pending());
+        drop(lease);
+        replace.await;
+        assert_eq!(shared.acquire("key").await.as_deref(), Some("second"));
+        assert!(shared.acquire("unselected").await.is_none());
     }
 }

@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:moly:conversation-history:1",
+  "title": "Moly conversation history v1 record",
+  "description": "An individual history record, not an MPP or Agent Server envelope. A JSONL snapshot requires one session, zero or more entries, and one final selection, each terminated by LF. Duplicate JSON keys, byte/count limits, cross-record identities, ancestry, sequence uniqueness/order, selection revision/scope, fork identity, and branch-safe tool references require the strict codec and semantic validator. Integer lexical forms, finite binary64 floats, and bounded payload nesting also require the codec; unsupported integer magnitudes must not be rounded. Opaque values are not validated as upstream state or proven nonsecret.",
+  "oneOf": [
+    {"$ref": "#/$defs/SessionRecord"},
+    {"$ref": "#/$defs/EntryRecord"},
+    {"$ref": "#/$defs/SelectionRecord"}
+  ],
+  "$defs": {
+    "Identity": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {"const": "00000000-0000-0000-0000-000000000000"},
+      "description": "Canonical lowercase hyphenated non-nil UUID; no UUID version restriction."
+    },
+    "NullableIdentity": {"oneOf": [{"$ref": "#/$defs/Identity"}, {"type": "null"}]},
+    "U64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "Sequence": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "Nonblank": {
+      "type": "string",
+      "pattern": "[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
+      "description": "Contains at least one character outside Unicode White_Space; leading/trailing whitespace is preserved."
+    },
+    "ForkOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "entry_id"],
+      "properties": {
+        "session_id": {"$ref": "#/$defs/Identity"},
+        "entry_id": {"$ref": "#/$defs/NullableIdentity"}
+      },
+      "description": "External provenance: session_id must differ from this snapshot's session_id; entry_id need not resolve locally."
+    },
+    "SessionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format_version", "session_id", "created_at_ms", "scope"],
+      "properties": {
+        "type": {"const": "session"},
+        "format_version": {"const": 1},
+        "session_id": {"$ref": "#/$defs/Identity"},
+        "created_at_ms": {"$ref": "#/$defs/U64"},
+        "scope": {"enum": ["full_tree", "selected_branch"]},
+        "name": {"type": ["string", "null"]},
+        "workspace": {"type": ["string", "null"]},
+        "forked_from": {"oneOf": [{"$ref": "#/$defs/ForkOrigin"}, {"type": "null"}]}
+      }
+    },
+    "EntryRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "parent_id", "sequence", "timestamp_ms", "data"],
+      "properties": {
+        "type": {"const": "entry"},
+        "id": {"$ref": "#/$defs/Identity"},
+        "parent_id": {"$ref": "#/$defs/NullableIdentity"},
+        "sequence": {"$ref": "#/$defs/Sequence"},
+        "timestamp_ms": {"$ref": "#/$defs/U64"},
+        "data": {"$ref": "#/$defs/EntryData"}
+      }
+    },
+    "SelectionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "head", "revision"],
+      "properties": {
+        "type": {"const": "selection"},
+        "head": {"$ref": "#/$defs/NullableIdentity"},
+        "revision": {"$ref": "#/$defs/U64"}
+      }
+    },
+    "ProviderData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "value"],
+      "properties": {"format": {"$ref": "#/$defs/Nonblank"}, "value": {}}
+    },
+    "ProviderScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "binding"],
+      "properties": {"provider": {"$ref": "#/$defs/Nonblank"}, "binding": {"$ref": "#/$defs/Nonblank"}},
+      "description": "Stable nonsecret adapter/account/configuration binding, not a credential or executable path."
+    },
+    "Attribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "binding", "model"],
+      "properties": {
+        "provider": {"$ref": "#/$defs/Nonblank"},
+        "binding": {"$ref": "#/$defs/Nonblank"},
+        "model": {"$ref": "#/$defs/Nonblank"}
+      }
+    },
+    "ToolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "arguments"],
+      "properties": {
+        "id": {"$ref": "#/$defs/Nonblank"},
+        "name": {"$ref": "#/$defs/Nonblank"},
+        "arguments": {"type": "object"}
+      },
+      "description": "Call IDs are unique within the containing assistant; arguments remain opaque JSON objects."
+    },
+    "ToolDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "input_schema"],
+      "properties": {
+        "name": {"$ref": "#/$defs/Nonblank"},
+        "description": {"type": "string"},
+        "input_schema": {"type": "object"}
+      },
+      "description": "Names are unique within the containing tools entry; input_schema is an opaque object."
+    },
+    "EntryData": {
+      "oneOf": [
+        {"$ref": "#/$defs/User"},
+        {"$ref": "#/$defs/Assistant"},
+        {"$ref": "#/$defs/ToolResult"},
+        {"$ref": "#/$defs/SystemPrompt"},
+        {"$ref": "#/$defs/Tools"},
+        {"$ref": "#/$defs/ProviderState"},
+        {"$ref": "#/$defs/SessionMetadata"}
+      ]
+    },
+    "User": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "text"],
+      "properties": {"kind": {"const": "user"}, "text": {"type": "string"}}
+    },
+    "Assistant": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "text", "tool_calls"],
+      "properties": {
+        "kind": {"const": "assistant"},
+        "text": {"type": ["string", "null"]},
+        "tool_calls": {"type": "array", "items": {"$ref": "#/$defs/ToolCall"}},
+        "metadata": {"oneOf": [{"$ref": "#/$defs/ProviderData"}, {"type": "null"}]},
+        "attribution": {"oneOf": [{"$ref": "#/$defs/Attribution"}, {"type": "null"}]}
+      },
+      "anyOf": [
+        {"properties": {"text": {"type": "string"}}},
+        {"properties": {"tool_calls": {"minItems": 1}}}
+      ]
+    },
+    "ToolResult": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "assistant_id", "call_id", "output"],
+      "properties": {
+        "kind": {"const": "tool_result"},
+        "assistant_id": {"$ref": "#/$defs/Identity"},
+        "call_id": {"$ref": "#/$defs/Nonblank"},
+        "output": {}
+      }
+    },
+    "SystemPrompt": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "text"],
+      "properties": {"kind": {"const": "system_prompt"}, "text": {"type": "string"}}
+    },
+    "Tools": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "tools"],
+      "properties": {"kind": {"const": "tools"}, "tools": {"type": "array", "items": {"$ref": "#/$defs/ToolDefinition"}}}
+    },
+    "ProviderState": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "scope", "state"],
+      "properties": {
+        "kind": {"const": "provider_state"},
+        "scope": {"$ref": "#/$defs/ProviderScope"},
+        "state": {"oneOf": [{"$ref": "#/$defs/ProviderData"}, {"type": "null"}]}
+      }
+    },
+    "SessionMetadata": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "name"],
+      "properties": {"kind": {"const": "session_metadata"}, "name": {"type": ["string", "null"]}}
+    }
+  }
+}

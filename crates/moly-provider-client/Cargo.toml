@@ -1,0 +1,24 @@
+[package]
+name = "moly-provider-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.moly]
+surface = "sdk"
+stability = "experimental"
+
+[dependencies]
+moly-protocol.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

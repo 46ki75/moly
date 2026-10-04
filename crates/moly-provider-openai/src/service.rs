@@ -1,4 +1,4 @@
-//! Model Provider v1 handshake and correlated method dispatch.
+//! Model Provider v2 handshake and correlated method dispatch.
 
 use moly_protocol::model::{ModelRequest, PROVIDER_VERSION, ProviderInitialized};
 use moly_protocol::{Body, Message, ProtocolError};
@@ -81,6 +81,10 @@ impl Service {
                 provider::validate(params)?;
                 Ok(Value::Null)
             }
+            "provider.auth" => Err(ProtocolError::new(
+                "auth_unsupported",
+                "This Provider accepts externally supplied API credentials",
+            )),
             "provider.step" => {
                 if !params.is_object() {
                     return Err(invalid_params());
@@ -148,7 +152,7 @@ mod tests {
                 &mut service,
                 2,
                 "initialize",
-                json!({"protocol_version": 2}),
+                json!({"protocol_version": 1}),
             )
             .await,
             "incompatible_version",
@@ -171,18 +175,18 @@ mod tests {
             &mut service,
             5,
             "initialize",
-            json!({"protocol_version": 1, "future": true}),
+            json!({"protocol_version": PROVIDER_VERSION, "future": true}),
         )
         .await;
         assert!(
-            matches!(initialized, Body::Response { result, .. } if result == json!({"role": "model_provider", "protocol_version": 1}))
+            matches!(initialized, Body::Response { result, .. } if result == json!({"role": "model_provider", "protocol_version": PROVIDER_VERSION}))
         );
         assert_error(
             request(
                 &mut service,
                 6,
                 "initialize",
-                json!({"protocol_version": 1}),
+                json!({"protocol_version": PROVIDER_VERSION}),
             )
             .await,
             "already_initialized",
@@ -204,14 +208,14 @@ mod tests {
     async fn positional_arrays_are_not_request_objects() -> TestResult {
         let mut service = Service::new()?;
         assert_error(
-            request(&mut service, 1, "initialize", json!([1])).await,
+            request(&mut service, 1, "initialize", json!([PROVIDER_VERSION])).await,
             "invalid_params",
         );
         request(
             &mut service,
             2,
             "initialize",
-            json!({"protocol_version": 1}),
+            json!({"protocol_version": PROVIDER_VERSION}),
         )
         .await;
         let positional = json!([
@@ -240,7 +244,7 @@ mod tests {
             &mut service,
             1,
             "initialize",
-            json!({"protocol_version": 1}),
+            json!({"protocol_version": PROVIDER_VERSION}),
         )
         .await;
         let options = json!({"model_endpoint": "https://example.invalid/exact?query", "model": "mock", "future": true});
