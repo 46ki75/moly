@@ -305,7 +305,7 @@ async fn idle_server_loss_exits_even_while_stdin_is_open() -> Result<(), TestErr
 }
 
 #[tokio::test]
-async fn opencode_go_cli_preserves_session_headers_across_tools_turns_and_new()
+async fn opencode_go_cli_preserves_session_headers_across_tool_errors_turns_and_new()
 -> Result<(), TestError> {
     tokio::time::timeout(Duration::from_secs(15), async {
         let (directory, endpoint, mut server, listener, observer) = fixture(false).await?;
@@ -338,7 +338,7 @@ async fn opencode_go_cli_preserves_session_headers_across_tools_turns_and_new()
         let tool_message = json!({
             "role": "assistant", "content": null, "reasoning_content": "opaque-go-reasoning",
             "tool_calls": [{"id": "go-read", "type": "function", "function": {
-                "name": "read_file", "arguments": "{\"path\":\"notes.txt\"}"
+                "name": "read_file", "arguments": "{\"path\":\"missing-private-file\"}"
             }}]
         });
         respond_body(
@@ -347,16 +347,52 @@ async fn opencode_go_cli_preserves_session_headers_across_tools_turns_and_new()
             json!({"choices": [{"message": tool_message, "finish_reason": "tool_calls"}]}),
         )
         .await?;
-        let (headers, body, stream) = http_request(&listener).await?;
+        let (headers, body, stream) = tokio::select! {
+            request = http_request(&listener) => request?,
+            prompt = cli.prompt() => {
+                prompt?;
+                return Err("run ended before Go tool-error continuation".into());
+            },
+        };
         check_go_headers(&headers, session);
         assert_eq!(body["messages"][1], tool_message);
         assert_eq!(body["messages"][2]["tool_call_id"], "go-read");
-        let tool_output: Value = serde_json::from_str(
+        let tool_error: Value = serde_json::from_str(
             body["messages"][2]["content"]
+                .as_str()
+                .ok_or("missing tool error")?,
+        )?;
+        assert_eq!(
+            tool_error,
+            json!({"error":{
+                "code":"tool_file_not_found", "message":"Requested file was not found",
+            }})
+        );
+        let corrected = json!({
+            "role": "assistant", "content": null, "reasoning_content": "opaque-go-correction",
+            "tool_calls": [{"id": "go-corrected", "type": "function", "function": {
+                "name": "read_file", "arguments": "{\"path\":\"notes.txt\"}"
+            }}]
+        });
+        respond_body(
+            stream,
+            200,
+            json!({"choices":[{
+                "message":corrected, "finish_reason":"tool_calls",
+            }]}),
+        )
+        .await?;
+        let (headers, body, stream) = http_request(&listener).await?;
+        check_go_headers(&headers, session);
+        assert_eq!(body["messages"][1], tool_message);
+        assert_eq!(body["messages"][3], corrected);
+        assert_eq!(body["messages"][4]["tool_call_id"], "go-corrected");
+        let tool_output: Value = serde_json::from_str(
+            body["messages"][4]["content"]
                 .as_str()
                 .ok_or("missing tool output")?,
         )?;
-        assert_eq!(tool_output["content"], "go-notes");
+        assert_eq!(tool_output, json!({"content":"go-notes"}));
         let answer =
             json!({"role": "assistant", "content": "done", "reasoning_content": "opaque-go-final"});
         respond_body(
@@ -369,7 +405,7 @@ async fn opencode_go_cli_preserves_session_headers_across_tools_turns_and_new()
         cli.send("again\n").await?;
         let (headers, body, stream) = http_request(&listener).await?;
         check_go_headers(&headers, session);
-        assert_eq!(body["messages"][3], answer);
+        assert_eq!(body["messages"][5], answer);
         respond(stream, 200, "second").await?;
         assert_eq!(cli.prompt().await?, "second\nmoly> ");
         cli.send("/new\nnew\n").await?;

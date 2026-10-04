@@ -121,6 +121,9 @@ impl Tool {
     /// Define an asynchronous hosted tool, automatically bound to the issued lease.
     ///
     /// Callbacks may make nested Client requests; they must not block the runtime.
+    /// Return known execution failures as `Ok(json!({"error": {"code": ..., "message": ...}}))`
+    /// with sanitized descriptions so the model can recover. `Err(ProtocolError)`
+    /// is an RPC failure and terminates the run; the SDK does not reclassify it.
     /// Connection loss aborts callback futures, not already-performed side effects.
     /// Prefer weak captures when referencing a Client from its own callback, or
     /// explicitly call [`Client::close`] to release the registration cycle.

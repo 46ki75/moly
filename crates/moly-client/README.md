@@ -82,6 +82,12 @@ Use `Tool::new` with a `protocol::ToolDefinition` and an async callback returnin
 The SDK returns results with the Server-issued lease automatically. Callbacks may
 make ordinary requests through the same Client without blocking correlation.
 
+Return known execution failures as `Ok(json!({"error": {"code": ..., "message": ...}}))`
+so the model receives a correlated result and can recover. Sanitize descriptions at
+source: Core keeps output opaque and does not redact it. Reserve `Err(ProtocolError)`
+for RPC/execution faults that must terminate the run; the SDK does not reclassify them.
+`ToolCompleted` means an outcome was committed, not that the operation succeeded.
+
 ```no_run
 use moly_client::{Client, Error, Tool, protocol::{SessionId, ToolDefinition}};
 use serde_json::json;
@@ -90,10 +96,15 @@ use serde_json::json;
 let echo = Tool::new(
     ToolDefinition {
         name: "echo".into(),
-        description: "Return the supplied arguments".into(),
-        input_schema: json!({"type": "object"}),
+        description: "Return the supplied text or a sanitized argument error".into(),
+        input_schema: json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
     },
-    |arguments| async move { Ok(arguments) },
+    |arguments| async move {
+        let Some(text) = arguments.get("text").and_then(serde_json::Value::as_str) else {
+            return Ok(json!({"error": {"code": "invalid_arguments", "message": "Expected a text string"}}));
+        };
+        Ok(json!({"text": text}))
+    },
 );
 client.register_tools(session, vec![echo]).await?;
 # Ok(())

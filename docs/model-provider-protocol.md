@@ -121,6 +121,14 @@ is **not** an OpenAI stringified tool message; each Provider performs its own
 upstream encoding. Metadata is `{format, value}` and remains opaque to Core.
 It is replay data, not an instruction for Core to execute anything.
 
+Tool `output` may contain a known execution failure such as
+`{"error":{"code":"tool_file_not_found","message":"Requested file was not found"}}`.
+This is a correlated `tool_result`, not a failed `provider.step`. Providers encode
+it just like any other tool output; Core neither parses it nor automatically retries
+the tool. Every call in an accepted batch receives its result before inference
+continues, unless a runtime failure or cancellation terminates the run. See
+[tool execution outcomes](protocol.md#tool-execution-outcomes).
+
 Outcomes:
 
 - `completed`: `text` and optional/nullable `metadata`.

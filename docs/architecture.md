@@ -123,6 +123,15 @@ it does not retry or reassign side effects. Cancellation does not undo side effe
 already performed, and remote callback cancellation is best-effort (connection
 closure aborts callbacks; run cancellation rejects their late results).
 
+Known `read_file` execution failures are typed in the executor and returned as
+sanitized `output.error` data with the original lease. Core commits the result,
+retains the Provider call ID, finishes the accepted tool batch, and resumes inference
+within the existing 16-step limit. `ToolCompleted` denotes a committed outcome,
+not successful file access. Invalid workspace configuration, authority violations,
+transport faults, and reverse RPC errors still terminate the run. Client-hosted
+tools use the same output convention explicitly; Core does not classify arbitrary
+RPC errors by their codes. See [tool outcomes](protocol.md#tool-execution-outcomes).
+
 Conversation history is extended with the accepted user message. Tool-call and
 assistant working context is promoted on successful completion only; cancellation
 and failure discard that run's partial model/tool context. Canonical events still
@@ -176,7 +185,9 @@ terminal Ctrl-C reaches the CLI's cancellation handler, not the Server.
 - Tool registrations are connection-scoped and session-specific. No placement
   policy, tool input-schema validation engine, tool-output streaming, retries,
   process trees, or persistent executors. An executor disappearing during work
-  fails the run rather than migrating its side effect.
+  fails the run rather than migrating its side effect. Only `read_file` is bundled;
+  there is no directory-listing capability. Tool events do not carry outputs or an
+  explicit success/failure flag; known execution failures are carried in model context.
 - Config updates have CAS but no `config.changed` subscription yet. Secret updates
   are separate and unversioned; a config revision does not freeze secret contents.
 - Provider protocol v1 supports cross-language extensions but is experimental, not

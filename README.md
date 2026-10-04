@@ -125,6 +125,11 @@ Connection loss or a command deadline exits with an explicit error, without
 reconnecting or retrying an uncertain operation. Short SDK requests have a
 10-second deadline; inference waits for a terminal event or cancellation.
 
+Known `read_file` failures (for example, a missing file) are returned to the model
+as [correlated tool results](docs/protocol.md#tool-execution-outcomes), allowing it
+to correct its request or ask for help. Runtime faults still fail the run. Tools
+are not automatically retried, and only `read_file` is bundled—no directory listing.
+
 This is a single-line REPL, not a full-screen TUI: no streaming output, multiline
 editor, persistent input history, completion, or session browser. `/new` does not
 delete the old Server-owned session.

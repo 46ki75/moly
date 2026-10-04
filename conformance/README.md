@@ -12,11 +12,13 @@ Keep this directory outside implementation archives.
 - `fixtures/`: deterministic provider and workspace inputs when shared fixtures
   become useful; current tests construct isolated temporary inputs inline.
 - `state-transitions/`: multi-client, cancellation, replay, executor, and REPL
-  conformance. REPL cases cover lazy local commands, multi-turn history, `/new`,
-  errors, EOF, and idle disconnect with stdin open. A Go-profile case verifies
-  conversation headers, tool/turn reasoning replay, `/new`, and CLI selection through
-  actual CLI/Server/Provider processes with local mock HTTP. The optional Unix Python smoke
-  also checks process-group isolation and active/idle Ctrl-C.
+  conformance. Tool cases cover correlated recoverable outcomes, mixed batches,
+  the model-step limit, fatal RPC/configuration faults, and cancellation/lease fences.
+  REPL cases cover lazy local commands, multi-turn history, `/new`, errors, EOF,
+  and idle disconnect with stdin open. A Go-profile case verifies conversation
+  headers, missing-file recovery, tool/turn reasoning replay, `/new`, and CLI selection
+  through actual CLI/Server/Provider processes with local mock HTTP. The optional
+  Unix Python smoke also checks process-group isolation and active/idle Ctrl-C.
 - `support/`: subprocess test harness; builds are supplied externally, never started
   recursively by a test. End-to-end fixtures talk to the actual Server executable.
 - `startup.py`: first-prompt latency measurement with an unusable backend endpoint.

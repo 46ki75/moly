@@ -257,12 +257,22 @@ fn final_response(text: &str) -> Value {
 }
 
 fn tool_response(name: &str, arguments: Value) -> Value {
+    tool_batch_response(&[("call-1", name, arguments)])
+}
+
+fn tool_batch_response(calls: &[(&str, &str, Value)]) -> Value {
+    let calls: Vec<_> = calls
+        .iter()
+        .map(|(id, name, arguments)| {
+            json!({
+                "id":id, "type":"function",
+                "function":{"name":name, "arguments":arguments.to_string()}
+            })
+        })
+        .collect();
     json!({"object":"chat.completion", "choices":[{
         "index":0, "finish_reason":"tool_calls", "message":{
-            "role":"assistant", "content":null, "tool_calls":[{
-                "id":"call-1", "type":"function",
-                "function":{"name":name, "arguments":arguments.to_string()}
-            }]
+            "role":"assistant", "content":null, "tool_calls":calls
         }
     }]})
 }
@@ -296,6 +306,53 @@ async fn until_terminal(events: &mut Events, run: RunId) -> Result<Vec<SessionEv
             return Err("unexpectedly many events before terminal transition".into());
         }
     }
+}
+
+async fn until_model_call(events: &mut Events, run: RunId) -> Result<Vec<SessionEvent>, TestError> {
+    let mut result = Vec::new();
+    loop {
+        let event = events.recv().await.ok_or("event connection closed")?;
+        if event.kind.terminal_run() == Some(run) {
+            return Err("run terminated before the next model call".into());
+        }
+        let started =
+            matches!(event.kind, EventKind::ModelCallStarted { run_id, .. } if run_id == run);
+        result.push(event);
+        if started {
+            return Ok(result);
+        }
+        if result.len() > 64 {
+            return Err("unexpectedly many events before model call".into());
+        }
+    }
+}
+
+fn assert_tool_output(message: &Value, call_id: &str, expected: Value) -> TestResult {
+    assert_eq!(message["role"], "tool");
+    assert_eq!(message["tool_call_id"], call_id);
+    let output: Value =
+        serde_json::from_str(message["content"].as_str().ok_or("missing tool content")?)?;
+    assert_eq!(output, expected);
+    Ok(())
+}
+
+fn assert_tool_leases(events: &[SessionEvent], count: usize) {
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolStarted { lease, .. } => Some(lease),
+            _ => None,
+        })
+        .collect();
+    let completed: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolCompleted { lease, .. } => Some(lease),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), count);
+    assert_eq!(started, completed);
 }
 
 fn contiguous(events: &[SessionEvent], session: SessionId, first: u64) {
@@ -381,6 +438,222 @@ async fn two_clients_share_config_cas_and_replay_a_local_tool_run() -> TestResul
         assert_remote(second.subscribe(session, 10).await, "invalid_seq");
         first.close();
         second.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn recoverable_file_error_is_correlated_and_model_can_correct_its_request() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        tokio::fs::write(fixture.directory.path().join("README.md"), "hermetic project\n").await?;
+        let (client, mut events) = fixture.client().await?;
+        fixture.configure(&client).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let run = client.start_run(session, "What is this project?".into()).await?;
+        let mut committed = until_model_call(&mut events, run).await?;
+        fixture.next_request().await?.respond(tool_batch_response(&[
+            ("missing", "read_file", json!({"path":"missing-private-file"})),
+        ])).await?;
+        committed.extend(until_model_call(&mut events, run).await?);
+        let request = fixture.next_request().await?;
+        assert_tool_output(&request.body["messages"][2], "missing", json!({"error":{
+            "code":"tool_file_not_found", "message":"Requested file was not found",
+        }}))?;
+        request.respond(tool_batch_response(&[
+            ("corrected", "read_file", json!({"path":"README.md"})),
+        ])).await?;
+        committed.extend(until_model_call(&mut events, run).await?);
+        let request = fixture.next_request().await?;
+        assert_eq!(request.body["messages"].as_array().ok_or("missing messages")?.len(), 5);
+        assert_eq!(request.body["messages"][2]["tool_call_id"], "missing");
+        assert_tool_output(&request.body["messages"][4], "corrected", json!({"content":"hermetic project\n"}))?;
+        request.respond(final_response("Project explained after correcting the filename")).await?;
+        committed.extend(until_terminal(&mut events, run).await?);
+        contiguous(&committed, session, 1);
+        assert_tool_leases(&committed, 2);
+        assert!(matches!(committed.last().ok_or("missing terminal")?.kind, EventKind::RunCompleted { run_id } if run_id == run));
+        assert!(!committed.iter().any(|event| matches!(event.kind, EventKind::RunFailed { .. })));
+
+        // Once the run succeeds, its failed attempt is part of later model context too.
+        let next = client.start_run(session, "Thanks".into()).await?;
+        let request = fixture.next_request().await?;
+        assert_tool_output(&request.body["messages"][2], "missing", json!({"error":{
+            "code":"tool_file_not_found", "message":"Requested file was not found",
+        }}))?;
+        request.respond(final_response("You're welcome")).await?;
+        until_terminal(&mut events, next).await?;
+        client.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn recoverable_tool_batch_returns_all_results_before_resuming_inference() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        tokio::fs::write(fixture.directory.path().join("notes.txt"), "available").await?;
+        let (client, mut events) = fixture.client().await?;
+        fixture.configure(&client).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let run = client.start_run(session, "Read some files".into()).await?;
+        let mut committed = until_model_call(&mut events, run).await?;
+        fixture.next_request().await?.respond(tool_batch_response(&[
+            ("missing", "read_file", json!({"path":"missing-private-file"})),
+            ("available", "read_file", json!({"path":"notes.txt"})),
+            ("invalid", "read_file", json!({"path":1})),
+        ])).await?;
+        committed.extend(until_model_call(&mut events, run).await?);
+        let request = fixture.next_request().await?;
+        let messages = request.body["messages"].as_array().ok_or("missing messages")?;
+        assert_eq!(messages.len(), 5);
+        assert_tool_output(&messages[2], "missing", json!({"error":{
+            "code":"tool_file_not_found", "message":"Requested file was not found",
+        }}))?;
+        assert_tool_output(&messages[3], "available", json!({"content":"available"}))?;
+        assert_tool_output(&messages[4], "invalid", json!({"error":{
+            "code":"invalid_params", "message":"read_file requires exactly one nonempty string path",
+        }}))?;
+        request.respond(final_response("Batch handled")).await?;
+        committed.extend(until_terminal(&mut events, run).await?);
+        contiguous(&committed, session, 1);
+        assert_tool_leases(&committed, 3);
+        assert_eq!(committed.iter().filter(|event| matches!(event.kind, EventKind::ModelCallStarted { .. })).count(), 2);
+        assert!(matches!(committed.last().ok_or("missing terminal")?.kind, EventKind::RunCompleted { run_id } if run_id == run));
+        client.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn recoverable_file_errors_remain_bounded_by_the_model_step_limit() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        let (client, mut events) = fixture.client().await?;
+        fixture.configure(&client).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let run = client.start_run(session, "Keep requesting a missing file".into()).await?;
+        let mut committed = Vec::new();
+        // The public Server contract permits at most 16 model steps per run.
+        for step in 0..16 {
+            committed.extend(until_model_call(&mut events, run).await?);
+            let request = fixture.next_request().await?;
+            if step > 0 {
+                assert_tool_output(request.body["messages"].as_array().ok_or("missing messages")?.last().ok_or("missing tool result")?, "call-1", json!({"error":{
+                    "code":"tool_file_not_found", "message":"Requested file was not found",
+                }}))?;
+            }
+            request.respond(tool_response("read_file", json!({"path":"missing-private-file"}))).await?;
+        }
+        committed.extend(until_terminal(&mut events, run).await?);
+        contiguous(&committed, session, 1);
+        assert_tool_leases(&committed, 16);
+        assert_eq!(committed.iter().filter(|event| matches!(event.kind, EventKind::ModelCallStarted { .. })).count(), 16);
+        assert!(matches!(&committed.last().ok_or("missing terminal")?.kind, EventKind::RunFailed { error, .. } if error.code == "step_limit"));
+        assert!(matches!(fixture.requests.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
+        client.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn hosted_tool_error_output_is_recoverable_but_callback_error_is_fatal() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        let (client, mut events) = fixture.client().await?;
+        fixture.configure(&client).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let output = json!({"error":{"code":"not_available", "message":"Requested item is unavailable"}});
+        let callback_output = output.clone();
+        client.register_tools(session, vec![Tool::new(tool_definition(), move |arguments| {
+            let output = callback_output.clone();
+            async move {
+                if arguments["fatal"] == true {
+                    return Err(moly_protocol::ProtocolError::new("tool_error", "Callback could not complete reliably"));
+                }
+                Ok(output)
+            }
+        })]).await?;
+        let recovered = client.start_run(session, "Use client_echo".into()).await?;
+        let mut committed = until_model_call(&mut events, recovered).await?;
+        fixture.next_request().await?.respond(tool_response("client_echo", json!({"fatal":false}))).await?;
+        committed.extend(until_model_call(&mut events, recovered).await?);
+        let request = fixture.next_request().await?;
+        assert_tool_output(&request.body["messages"][2], "call-1", output)?;
+        request.respond(final_response("Recoverable error received")).await?;
+        committed.extend(until_terminal(&mut events, recovered).await?);
+        assert_tool_leases(&committed, 1);
+        assert!(matches!(committed.last().ok_or("missing terminal")?.kind, EventKind::RunCompleted { run_id } if run_id == recovered));
+
+        let failed = client.start_run(session, "Use the failing callback".into()).await?;
+        fixture.next_request().await?.respond(tool_response("client_echo", json!({"fatal":true}))).await?;
+        let terminal = until_terminal(&mut events, failed).await?;
+        assert!(matches!(&terminal.last().ok_or("missing terminal")?.kind, EventKind::RunFailed { error, .. } if error.code == "executor_lost" && error.message == "executor request failed"));
+        assert!(!terminal.iter().any(|event| matches!(event.kind, EventKind::ToolCompleted { .. })));
+        assert!(matches!(fixture.requests.try_recv(), Err(mpsc::error::TryRecvError::Empty)));
+        client.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn invalid_workspace_still_fails_the_run_instead_of_returning_a_tool_result() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        let (client, mut events) = fixture.client().await?;
+        let mut config = fixture.config()?;
+        config.workspace = fixture.directory.path().join("missing-workspace").to_string_lossy().into_owned();
+        client.apply_config(0, config).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let run = client.start_run(session, "Read a file in an unavailable workspace".into()).await?;
+        fixture.next_request().await?.respond(tool_response("read_file", json!({"path":"README.md"}))).await?;
+        let committed = until_terminal(&mut events, run).await?;
+        assert!(matches!(&committed.last().ok_or("missing terminal")?.kind, EventKind::RunFailed { error, .. } if error.code == "invalid_config"));
+        assert!(!committed.iter().any(|event| matches!(event.kind, EventKind::ToolCompleted { .. })));
+        assert_eq!(committed.iter().filter(|event| matches!(event.kind, EventKind::ModelCallStarted { .. })).count(), 1);
+        client.close();
+        fixture.stop().await
+    }).await
+}
+
+#[tokio::test]
+async fn cancellation_after_a_recoverable_tool_result_discards_partial_context() -> TestResult {
+    bounded(async {
+        let mut fixture = Fixture::new().await?;
+        let (client, mut events) = fixture.client().await?;
+        fixture.configure(&client).await?;
+        let session = client.create_session().await?;
+        client.subscribe(session, 0).await?;
+        let cancelled = client.start_run(session, "Cancel after the missing file".into()).await?;
+        let mut committed = until_model_call(&mut events, cancelled).await?;
+        fixture.next_request().await?.respond(tool_response("read_file", json!({"path":"missing-private-file"}))).await?;
+        committed.extend(until_model_call(&mut events, cancelled).await?);
+        let late = fixture.next_request().await?;
+        assert_tool_output(&late.body["messages"][2], "call-1", json!({"error":{
+            "code":"tool_file_not_found", "message":"Requested file was not found",
+        }}))?;
+        client.cancel_run(session, cancelled).await?;
+        committed.extend(until_terminal(&mut events, cancelled).await?);
+        assert_tool_leases(&committed, 1);
+        assert!(matches!(committed.last().ok_or("missing terminal")?.kind, EventKind::RunCancelled { run_id } if run_id == cancelled));
+        let replacement = client.start_run(session, "Replace it".into()).await?;
+        let fresh = fixture.next_request().await?;
+        assert_eq!(fresh.body["messages"], json!([
+            {"role":"user", "content":"Cancel after the missing file"},
+            {"role":"user", "content":"Replace it"},
+        ]));
+        let _ = late.release(final_response("obsolete result must never commit")).await?;
+        fresh.respond(final_response("replacement completed")).await?;
+        committed.extend(until_terminal(&mut events, replacement).await?);
+        contiguous(&committed, session, 1);
+        assert_eq!(committed.iter().filter(|event| event.kind.terminal_run() == Some(cancelled)).count(), 1);
+        assert!(matches!(committed.last().ok_or("missing terminal")?.kind, EventKind::RunCompleted { run_id } if run_id == replacement));
+        client.close();
         fixture.stop().await
     }).await
 }
@@ -599,26 +872,33 @@ async fn a_raw_executor_cannot_commit_a_mismatched_lease() -> TestResult {
         raw.request("initialize", json!({"protocol_version":VERSION})).await?;
         let registered = raw.request("tools.register", serde_json::to_value(ToolsRegister { session_id: session, tools: vec![tool_definition()] })?).await?;
         let executor: ExecutorId = serde_json::from_value(registered["executor_id"].clone())?;
-        let run = client.start_run(session, "Reject wrong authority".into()).await?;
-        fixture.next_request().await?.respond(tool_response("client_echo", json!({"text":"wrong lease"}))).await?;
-        let (id, request) = match inbox.recv().await.ok_or("raw executor disconnected")? {
-            Incoming::Request { id, method, params } => {
-                assert_eq!(method, "tool.execute");
-                (id, serde_json::from_value::<ToolExecute>(params)?)
-            }
-            _ => return Err("expected reverse tool request".into()),
-        };
-        assert_eq!(request.session_id, session);
-        assert_eq!(request.lease.executor_id, executor);
-        assert_eq!(request.arguments, json!({"text":"wrong lease"}));
-        let mut wrong = request.lease;
-        wrong.generation += 1;
-        raw.respond(id, Ok(serde_json::to_value(ToolResult { lease: wrong, output: json!("must not commit") })?)).await?;
-        let committed = until_terminal(&mut events, run).await?;
-        contiguous(&committed, session, 1);
-        assert_eq!(committed.len(), 6);
-        assert!(matches!(&committed[5].kind, EventKind::RunFailed { run_id, error } if *run_id == run && error.code == "stale_tool_result"));
-        assert!(!committed.iter().any(|event| matches!(event.kind, EventKind::ToolCompleted { .. } | EventKind::AssistantMessage { .. })));
+        let mut next_seq = 1;
+        for output in [
+            json!("must not commit"),
+            json!({"error":{"code":"not_available", "message":"must not commit"}}),
+        ] {
+            let run = client.start_run(session, "Reject wrong authority".into()).await?;
+            fixture.next_request().await?.respond(tool_response("client_echo", json!({"text":"wrong lease"}))).await?;
+            let (id, request) = match inbox.recv().await.ok_or("raw executor disconnected")? {
+                Incoming::Request { id, method, params } => {
+                    assert_eq!(method, "tool.execute");
+                    (id, serde_json::from_value::<ToolExecute>(params)?)
+                }
+                _ => return Err("expected reverse tool request".into()),
+            };
+            assert_eq!(request.session_id, session);
+            assert_eq!(request.lease.executor_id, executor);
+            assert_eq!(request.arguments, json!({"text":"wrong lease"}));
+            let mut wrong = request.lease;
+            wrong.generation += 1;
+            raw.respond(id, Ok(serde_json::to_value(ToolResult { lease: wrong, output })?)).await?;
+            let committed = until_terminal(&mut events, run).await?;
+            contiguous(&committed, session, next_seq);
+            assert_eq!(committed.len(), if next_seq == 1 { 6 } else { 5 });
+            next_seq += committed.len() as u64;
+            assert!(matches!(&committed.last().ok_or("missing terminal")?.kind, EventKind::RunFailed { run_id, error } if *run_id == run && error.code == "stale_tool_result"));
+            assert!(!committed.iter().any(|event| matches!(event.kind, EventKind::ToolCompleted { .. } | EventKind::AssistantMessage { .. })));
+        }
         raw.close();
         client.close();
         fixture.stop().await

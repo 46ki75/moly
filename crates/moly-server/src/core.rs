@@ -710,6 +710,8 @@ impl Session {
             return;
         }
         match result {
+            // Known execution failures arrive in output. Never infer recoverability
+            // from an RPC error code or bypass lease validation for error results.
             Err(error) => self.fail(error),
             Ok(result) if result.lease != expected => self.fail(error(
                 "stale_tool_result",
